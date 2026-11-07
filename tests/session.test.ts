@@ -1,6 +1,6 @@
 import { generateLevel } from '../src/core/level';
-import { Grain, Session } from '../src/core/session';
-import { TABLE_BOTTOM } from '../src/core/world';
+import { Grain, Session, TOUCH_LIFT } from '../src/core/session';
+import { SQUARE, layoutForViewport } from '../src/core/world';
 
 const center = (r: { x: number; y: number; w: number; h: number }) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 
@@ -33,7 +33,7 @@ describe('Session', () => {
     expect(s.grains.length).toBe(expected);
     for (const g of s.grains) {
       expect(Number.isFinite(g.x) && Number.isFinite(g.y)).toBe(true);
-      expect(g.y).toBeLessThanOrEqual(TABLE_BOTTOM);
+      expect(g.y).toBeLessThanOrEqual(s.layout.table.maxY);
     }
     // После раскладки кучи сильных перекрытий нет.
     let deep = 0;
@@ -69,7 +69,7 @@ describe('Session', () => {
     expect(filler.state).toBe('free');
     expect(tray.count).toBe(0);
     for (let i = 0; i < 120; i++) s.update(1 / 60);
-    expect(filler.y).toBeLessThanOrEqual(TABLE_BOTTOM);
+    expect(filler.y).toBeLessThanOrEqual(s.layout.table.maxY);
   });
 
   it('промах мимо зёрен ничего не берёт', () => {
@@ -113,5 +113,93 @@ describe('Session', () => {
     s.pointerUp();
     const moved = s.grains.filter((g, i) => Math.hypot(g.x - before[i].x, g.y - before[i].y) > 5).length;
     expect(moved).toBeGreaterThan(5);
+  });
+});
+
+describe('Раскладки под экран', () => {
+  const phone = layoutForViewport(374, 780);
+  const phoneLandscape = layoutForViewport(828, 326);
+  const desktop = layoutForViewport(1264, 736);
+
+  it('выбирает раскладку по форме экрана', () => {
+    expect(layoutForViewport(900, 900)).toBe(SQUARE);
+    expect(phone.kind).toBe('portrait');
+    expect(phone.w).toBe(600);
+    expect(phoneLandscape.kind).toBe('wide');
+    expect(phoneLandscape.h).toBe(600);
+    expect(phoneLandscape.trayDirection).toBe('column');
+    expect(desktop.kind).toBe('wide');
+  });
+
+  it('на телефоне зёрна заметно крупнее, чем в квадратном мире', () => {
+    const scale = (l: { w: number; h: number }, w: number, h: number) => Math.min(w / l.w, h / l.h);
+    expect(scale(phone, 374, 780)).toBeGreaterThan(scale(SQUARE, 374, 780) * 1.5);
+    expect(scale(phoneLandscape, 828, 326)).toBeGreaterThan(scale(SQUARE, 828, 326) * 1.5);
+  });
+
+  for (const [name, layout] of [
+    ['portrait', phone],
+    ['wide', phoneLandscape],
+    ['square', SQUARE],
+  ] as const) {
+    it(`${name}: зёрна на столе, лотки в мире и не пересекают стол`, () => {
+      for (const level of [1, 12, 30, 60]) {
+        const s = new Session(generateLevel(level), layout);
+        const t = layout.table;
+        for (const g of s.grains) {
+          expect(g.x - g.r).toBeGreaterThanOrEqual(t.minX - 0.001);
+          expect(g.x + g.r).toBeLessThanOrEqual(t.maxX + 0.001);
+          expect(g.y - g.r).toBeGreaterThanOrEqual(t.minY - 0.001);
+          expect(g.y + g.r).toBeLessThanOrEqual(t.maxY + 0.001);
+        }
+        for (const tr of s.trays) {
+          expect(tr.x).toBeGreaterThanOrEqual(0);
+          expect(tr.y).toBeGreaterThanOrEqual(0);
+          expect(tr.x + tr.w).toBeLessThanOrEqual(layout.w);
+          expect(tr.y + tr.h).toBeLessThanOrEqual(layout.h);
+          const overlaps = tr.x < t.maxX && tr.x + tr.w > t.minX && tr.y < t.maxY && tr.y + tr.h > t.minY;
+          expect(overlaps).toBe(false);
+        }
+      }
+    });
+  }
+
+  it('ошибка в боковом лотке возвращает зерно на стол', () => {
+    const s = new Session(generateLevel(1), phoneLandscape);
+    const tray = s.trays[0];
+    const filler = grabbable(s, s.config.fillers[0]);
+    moveGrain(s, filler, tray.x + tray.w / 2, tray.y + tray.h / 2);
+    expect(s.mistakes).toBe(1);
+    for (let i = 0; i < 120; i++) s.update(1 / 60);
+    expect(filler.x).toBeLessThanOrEqual(phoneLandscape.table.maxX);
+  });
+
+  it('касанием зерно поднимается над пальцем и попадает в лоток по своему положению', () => {
+    const s = new Session(generateLevel(1), phone);
+    const tray = s.trays[0];
+    const g = grabbable(s, tray.kind);
+    s.pointerDown(g.x, g.y, true);
+    expect(s.heldGrain).toBe(g);
+    for (let i = 0; i < 40; i++) s.update(1 / 60);
+    expect(s.chop.pointerY - g.y).toBeGreaterThan(TOUCH_LIFT * 0.9);
+    // Палец ниже центра лотка ровно на высоту подъёма — зерно над центром.
+    s.pointerMove(tray.x + tray.w / 2, tray.y + tray.h / 2 + TOUCH_LIFT);
+    for (let i = 0; i < 40; i++) s.update(1 / 60);
+    s.pointerUp();
+    expect(g.state).toBe('sorted');
+  });
+
+  it('палец захватывает с большим радиусом, чем мышь', () => {
+    const s = new Session(generateLevel(1), phone);
+    // Одиночное зерно в пустом месте стола, чтобы рядом не было других.
+    const g = s.grains[0];
+    g.x = 60;
+    g.y = 60;
+    const off = g.r + s.config.grabRadius + 5;
+    s.pointerDown(g.x + off, g.y);
+    expect(s.heldGrain).toBeNull();
+    s.pointerUp();
+    s.pointerDown(g.x + off, g.y, true);
+    expect(s.heldGrain).toBe(g);
   });
 });

@@ -2,7 +2,8 @@ import { generateLevel } from './core/level';
 import { Session } from './core/session';
 import { setLang, t } from './i18n';
 import { Platform, Progress, initPlatform } from './platform/platform';
-import { Renderer } from './render/renderer';
+import { Renderer, viewportArea } from './render/renderer';
+import { layoutForViewport } from './core/world';
 
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5;
@@ -73,7 +74,7 @@ class App {
       c.setPointerCapture(e.pointerId);
       const p = toWorld(e);
       this.session.chop.hover = e.pointerType === 'mouse';
-      this.session.pointerDown(p.x, p.y);
+      this.session.pointerDown(p.x, p.y, e.pointerType !== 'mouse');
     });
     c.addEventListener('pointermove', (e) => {
       if (!this.session) return;
@@ -100,7 +101,10 @@ class App {
   // ——— уровни ———
 
   private startLevel(index: number): void {
-    this.session = new Session(generateLevel(index));
+    const area = viewportArea();
+    const layout = layoutForViewport(area.w, area.h);
+    this.session = new Session(generateLevel(index), layout);
+    this.renderer.setLayout(layout);
     this.renderer.clearFx();
     this.acc = 0;
     this.state = 'playing';

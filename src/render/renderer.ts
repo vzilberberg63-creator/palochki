@@ -1,6 +1,19 @@
 import { GRAIN_KINDS, GrainKind } from '../core/grains';
 import type { GameEvent, Grain, Session, Tray } from '../core/session';
-import { TABLE_BOTTOM, WORLD_H, WORLD_W } from '../core/world';
+import { Layout, SQUARE } from '../core/world';
+
+/** Место сверху под HUD и поле по краям, в CSS-пикселях. */
+export const HUD_SPACE = 56;
+export const SCREEN_PAD = 8;
+const MAX_SCALE = 1;
+
+/** Область экрана, в которую вписывается мир. */
+export function viewportArea(): { w: number; h: number } {
+  return {
+    w: window.innerWidth - SCREEN_PAD * 2,
+    h: window.innerHeight - HUD_SPACE - SCREEN_PAD,
+  };
+}
 
 interface GrainColors {
   base: string;
@@ -26,7 +39,7 @@ interface RingFx {
 
 /** Направление от кончиков палочек к рукояткам (вверх-вправо). */
 const STICK_DIR = normalize(0.42, -0.91);
-const STICK_LEN = 560;
+const STICK_LEN = 520;
 const FX_LIFE = 0.8;
 
 export class Renderer {
@@ -39,11 +52,18 @@ export class Renderer {
   private floats: FloatFx[] = [];
   private rings: RingFx[] = [];
   private shake = 0;
+  private layout: Layout = SQUARE;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
     this.ctx = ctx;
+    this.resize();
+  }
+
+  /** Раскладка текущего уровня; масштаб пересчитывается под неё. */
+  setLayout(layout: Layout): void {
+    this.layout = layout;
     this.resize();
   }
 
@@ -56,11 +76,12 @@ export class Renderer {
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${h}px`;
     // Мир вписываем целиком, с небольшим полем; сверху оставляем место под HUD.
-    const hudSpace = 56;
-    const pad = 8;
-    this.scale = Math.min((w - pad * 2) / WORLD_W, (h - hudSpace - pad) / WORLD_H);
-    this.offsetX = (w - WORLD_W * this.scale) / 2;
-    this.offsetY = hudSpace + (h - hudSpace - pad - WORLD_H * this.scale) / 2;
+    const { w: lw, h: lh } = this.layout;
+    const area = viewportArea();
+    // На большом экране не раздуваем зёрна больше натурального размера мира.
+    this.scale = Math.min(area.w / lw, area.h / lh, MAX_SCALE);
+    this.offsetX = (w - lw * this.scale) / 2;
+    this.offsetY = HUD_SPACE + (area.h - lh * this.scale) / 2;
   }
 
   /** Экранные CSS-пиксели → координаты мира. */
@@ -135,7 +156,8 @@ export class Renderer {
     ctx.shadowColor = 'rgba(60, 45, 30, 0.18)';
     ctx.shadowBlur = 24;
     ctx.shadowOffsetY = 6;
-    roundRect(ctx, 6, 6, WORLD_W - 12, TABLE_BOTTOM - 6, 28);
+    const t = this.layout.table;
+    roundRect(ctx, t.minX, t.minY, t.maxX - t.minX, t.maxY - t.minY, 28);
     ctx.fillStyle = '#fbfaf7';
     ctx.fill();
     ctx.restore();

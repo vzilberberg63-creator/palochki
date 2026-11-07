@@ -2,7 +2,7 @@ import { GRAIN_KINDS, GrainKindId, collisionRadius } from './grains';
 import type { LevelConfig } from './level';
 import { Body, Bounds, Pusher, stepPhysics } from './physics';
 import { Rng } from './rng';
-import { PILE_CENTER, Rect, TABLE_BOTTOM, WORLD_W, rectContains, trayRects } from './world';
+import { Layout, Rect, SQUARE, rectContains, trayRects } from './world';
 
 export type GrainState = 'free' | 'held' | 'sorted';
 
@@ -32,6 +32,10 @@ export interface Chopsticks {
   pressed: boolean;
   /** Устройство показывает курсор без нажатия (мышь). */
   hover: boolean;
+  /** Текущее нажатие сделано пальцем. */
+  touch: boolean;
+  /** На сколько кончики палочек сейчас подняты над пальцем. */
+  lift: number;
   /** 0 — палочки раскрыты, 1 — сжаты. */
   pinch: number;
   heldId: number;
@@ -47,13 +51,17 @@ export type GameEvent =
 
 export type SessionStatus = 'playing' | 'won' | 'lost';
 
-const TABLE_BOUNDS: Bounds = { minX: 0, minY: 0, maxX: WORLD_W, maxY: TABLE_BOTTOM };
 const RAKE_RADIUS = 14;
+/** При касании пальцем зерно в палочках поднимается выше пальца, чтобы его было видно. */
+export const TOUCH_LIFT = 70;
+/** Палец менее точен, чем мышь: добавка к радиусу захвата. */
+export const TOUCH_GRAB_BONUS = 10;
 const SLIP_SPEED = 700;
 const SETTLE_STEPS = 90;
 
 export class Session {
   readonly config: LevelConfig;
+  readonly layout: Layout;
   readonly grains: Grain[] = [];
   readonly trays: Tray[];
   readonly chop: Chopsticks;
@@ -66,12 +74,15 @@ export class Session {
   events: GameEvent[] = [];
 
   private readonly rng: Rng;
+  private readonly bounds: Bounds;
 
-  constructor(config: LevelConfig) {
+  constructor(config: LevelConfig, layout: Layout = SQUARE) {
     this.config = config;
+    this.layout = layout;
+    this.bounds = layout.table;
     this.rng = new Rng(config.seed ^ 0x9e3779b9);
 
-    const rects = trayRects(config.targets);
+    const rects = trayRects(config.targets, layout);
     this.trays = config.targets.map((kind, i) => ({
       ...rects[i],
       kind,
@@ -80,15 +91,18 @@ export class Session {
     }));
     this.totalTargets = this.trays.reduce((s, t) => s + t.total, 0);
 
+    const pc = layout.pileCenter;
     this.chop = {
-      pointerX: PILE_CENTER.x,
-      pointerY: PILE_CENTER.y,
-      x: PILE_CENTER.x,
-      y: PILE_CENTER.y,
+      pointerX: pc.x,
+      pointerY: pc.y,
+      x: pc.x,
+      y: pc.y,
       vx: 0,
       vy: 0,
       pressed: false,
       hover: false,
+      touch: false,
+      lift: 0,
       pinch: 0,
       heldId: -1,
     };
@@ -114,10 +128,12 @@ export class Session {
     return 1 + (this.mistakes <= 2 ? 1 : 0) + (left >= 0.3 ? 1 : 0);
   }
 
-  pointerDown(x: number, y: number): void {
+  pointerDown(x: number, y: number, touch = false): void {
     if (this.status !== 'playing') return;
     this.chop.pointerX = x;
     this.chop.pointerY = y;
+    this.chop.touch = touch;
+    this.chop.lift = 0;
     this.updateTip(0);
     this.chop.pressed = true;
     this.tryGrab();
@@ -138,8 +154,10 @@ export class Session {
     if (this.status !== 'playing') return;
     this.elapsed += dt;
 
-    this.updateTip(dt);
     const c = this.chop;
+    const liftTarget = c.touch && this.heldGrain ? TOUCH_LIFT : 0;
+    c.lift += (liftTarget - c.lift) * Math.min(1, dt * 14);
+    this.updateTip(dt);
     const held = this.heldGrain;
     const pinchTarget = held ? 1 : c.pressed ? 0.45 : 0;
     c.pinch += (pinchTarget - c.pinch) * Math.min(1, dt * 18);
@@ -159,7 +177,7 @@ export class Session {
 
     stepPhysics(this.freeGrains(), dt, {
       damping: this.config.damping,
-      bounds: TABLE_BOUNDS,
+      bounds: this.bounds,
       pushers,
       kinematic: this.heldGrain,
     });
@@ -189,17 +207,23 @@ export class Session {
     // Перемешиваем, чтобы цели не лежали слоем поверх наполнителя.
     this.rng.shuffle(kinds);
 
+    // Куча — эллипс, повторяющий пропорции стола: на вертикальном экране он вытянут вверх.
     const R = this.config.pileRadius;
+    const { table, pileCenter } = this.layout;
+    const tw = table.maxX - table.minX;
+    const th = table.maxY - table.minY;
+    const rx = Math.min(R, tw * 0.42);
+    const ry = Math.min(R * (th / tw), th * 0.42);
     kinds.forEach((kind, id) => {
       const a = this.rng.range(0, Math.PI * 2);
-      const dist = Math.min(R, Math.abs(this.rng.gaussian()) * R * 0.5);
+      const dist = Math.min(1, Math.abs(this.rng.gaussian()) * 0.5);
       const def = GRAIN_KINDS[kind];
       this.grains.push({
         id,
         kind,
         state: 'free',
-        x: PILE_CENTER.x + Math.cos(a) * dist,
-        y: PILE_CENTER.y + Math.sin(a) * dist * 0.8,
+        x: pileCenter.x + Math.cos(a) * dist * rx,
+        y: pileCenter.y + Math.sin(a) * dist * ry,
         vx: 0,
         vy: 0,
         angle: this.rng.range(0, Math.PI * 2),
@@ -211,7 +235,7 @@ export class Session {
 
     // Раскладываем кучу, чтобы зёрна не лежали друг в друге.
     for (let i = 0; i < SETTLE_STEPS; i++) {
-      stepPhysics(this.grains, 1 / 60, { damping: 30, bounds: TABLE_BOUNDS, iterations: 3 });
+      stepPhysics(this.grains, 1 / 60, { damping: 30, bounds: this.bounds, iterations: 3 });
     }
     for (const g of this.grains) {
       g.vx = 0;
@@ -231,7 +255,7 @@ export class Session {
     const jx = j * (Math.sin(t * 7.3) * 0.6 + Math.sin(t * 2.9 + 1.3) * 0.4);
     const jy = j * (Math.sin(t * 6.1 + 0.7) * 0.6 + Math.sin(t * 3.7 + 2.1) * 0.4);
     const nx = c.pointerX + jx;
-    const ny = c.pointerY + jy;
+    const ny = c.pointerY + jy - c.lift;
     if (dt > 0) {
       c.vx = (nx - c.x) / dt;
       c.vy = (ny - c.y) / dt;
@@ -247,12 +271,13 @@ export class Session {
     const c = this.chop;
     let best: Grain | null = null;
     let bestScore = Infinity;
+    const radius = this.config.grabRadius + (c.touch ? TOUCH_GRAB_BONUS : 0);
     // Зёрна с большим id нарисованы сверху, поэтому при равенстве берём верхнее.
     for (let i = this.grains.length - 1; i >= 0; i--) {
       const g = this.grains[i];
       if (g.state !== 'free') continue;
       const d = Math.hypot(g.x - c.x, g.y - c.y) - g.r;
-      if (d <= this.config.grabRadius && d < bestScore) {
+      if (d <= radius && d < bestScore) {
         best = g;
         bestScore = d;
       }
@@ -295,9 +320,16 @@ export class Session {
     this.mistakes++;
     this.events.push({ type: 'wrong', x: g.x, y: g.y });
     g.state = 'free';
-    g.y = TABLE_BOTTOM - g.r - 2;
-    g.vx = (PILE_CENTER.x - g.x) * 0.8;
-    g.vy = -650;
+    // Ставим на край стола у лотка и бросаем к центру кучи.
+    const t = this.layout.table;
+    g.x = Math.max(t.minX + g.r, Math.min(t.maxX - g.r - 2, g.x));
+    g.y = Math.max(t.minY + g.r, Math.min(t.maxY - g.r - 2, g.y));
+    const pc = this.layout.pileCenter;
+    const dx = pc.x - g.x;
+    const dy = pc.y - g.y;
+    const d = Math.hypot(dx, dy) || 1;
+    g.vx = (dx / d) * 650;
+    g.vy = (dy / d) * 650;
     g.spin = this.rng.range(-12, 12);
   }
 
