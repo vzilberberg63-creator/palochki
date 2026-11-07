@@ -1,4 +1,5 @@
 import type { GrainKindId } from './core/grains';
+import type { GameMode } from './core/level';
 import type { SkinId } from './core/skins';
 
 type Dict = {
@@ -6,6 +7,7 @@ type Dict = {
   play: string;
   continue: string;
   level: string;
+  levelShort: string;
   next: string;
   retry: string;
   menu: string;
@@ -35,6 +37,11 @@ type Dict = {
   skins: Record<SkinId, string>;
   hint: string;
   levelGoal: (kinds: string) => string;
+  heapGoal: (kinds: string) => string;
+  heapHint: string;
+  intruderHint: string;
+  modes: Record<GameMode, string>;
+  modeDesc: Record<GameMode, string>;
   grains: Record<GrainKindId, string>;
 };
 
@@ -43,6 +50,7 @@ const ru: Dict = {
   play: 'Играть',
   continue: 'Продолжить',
   level: 'Уровень',
+  levelShort: 'Ур.',
   next: 'Дальше',
   retry: 'Ещё раз',
   menu: 'Меню',
@@ -81,6 +89,12 @@ const ru: Dict = {
   soundOff: 'Звук: выкл',
   hint: 'Нажмите на зерно, чтобы взять его палочками, и отпустите над нужным лотком. Ведите по пустому месту, чтобы разгрести кучу.',
   levelGoal: (k) => `Рассортируйте: ${k}`,
+  heapGoal: (k) => `Сгребите в копилки: ${k}`,
+  heapHint:
+    'Прижмите палочки к столу и ведите — они сгребают зёрна, как лопатка. Отделите нужные зёрна от кучи и столкните кучкой в копилку. Чужое зерно в копилке — нажмите на него, и палочки его выбросят.',
+  intruderHint: 'В копилке чужие зёрна — нажмите на них, чтобы выбросить',
+  modes: { heap: 'Кучки', pick: 'По зёрнышку' },
+  modeDesc: { heap: 'сгребать палочками', pick: 'брать по одному' },
   grains: {
     riceWhite: 'белый рис',
     riceBlack: 'чёрный рис',
@@ -98,6 +112,7 @@ const en: Dict = {
   play: 'Play',
   continue: 'Continue',
   level: 'Level',
+  levelShort: 'Lv',
   next: 'Next',
   retry: 'Retry',
   menu: 'Menu',
@@ -136,6 +151,12 @@ const en: Dict = {
   soundOff: 'Sound: off',
   hint: 'Press on a grain to pick it up with the chopsticks and release it over the matching tray. Drag across empty space to spread the pile.',
   levelGoal: (k) => `Sort: ${k}`,
+  heapGoal: (k) => `Sweep into the bins: ${k}`,
+  heapHint:
+    'Press the chopsticks to the table and drag: they sweep grains like a scraper. Split the right grains off the pile and push them into the bin as a heap. Tap a foreign grain in a bin to toss it out.',
+  intruderHint: 'Foreign grains in a bin: tap them to toss them out',
+  modes: { heap: 'Heaps', pick: 'One by one' },
+  modeDesc: { heap: 'sweep with chopsticks', pick: 'pick grains one at a time' },
   grains: {
     riceWhite: 'white rice',
     riceBlack: 'black rice',

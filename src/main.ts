@@ -1,18 +1,21 @@
 import { Sound } from './audio/sound';
-import { generateLevel } from './core/level';
+import { HeapSession } from './core/heap';
+import { GameMode, generateLevelFor } from './core/level';
 import { GameEvent, Session } from './core/session';
 import { setLang, t } from './i18n';
-import { Platform, Progress, initPlatform } from './platform/platform';
+import { ModeProgress, Platform, Progress, initPlatform } from './platform/platform';
 import { AD_COIN_MULTIPLIER, CONTINUE_SECONDS, SHOP_AD_COINS, coinsForWin } from './core/economy';
 import { SKINS, SkinId, skinById } from './core/skins';
 import { Renderer, URGENT_SECONDS, drawChopsticksPreview, viewportArea } from './render/renderer';
-import { layoutForViewport } from './core/world';
+import { heapLayout, layoutForViewport } from './core/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5;
 /** Полноэкранная реклама — не раньше, чем с этого уровня. */
 const ADS_FROM_LEVEL = 3;
+/** Ширина экрана (CSS px), ниже которой верхняя панель становится компактной. */
+const NARROW_HUD = 440;
 
 type AppState = 'menu' | 'playing' | 'paused' | 'result' | 'ad';
 
@@ -30,6 +33,7 @@ class App {
   private lastTick = 0;
   /** Идёт показ рекламы за награду: кнопки не реагируют повторно. */
   private adBusy = false;
+  private intruderHintShown = false;
   private readonly settings: Settings = loadSettings();
 
   constructor(
@@ -69,6 +73,7 @@ class App {
       this.renderer.handleEvents(events);
       this.playSounds(events, s);
       this.tickClock(s);
+      this.maybeIntruderHint(s);
       this.updateHud();
       if (s.status !== 'playing') this.finishLevel();
     }
@@ -79,18 +84,27 @@ class App {
   }
 
   private playSounds(events: readonly GameEvent[], s: Session): void {
+    // В «Кучках» в копилку въезжает сразу десяток зёрен: одна нота на кадр, а не десять разом.
+    let sortedPlayed = false;
+    let wrongPlayed = false;
     for (const e of events) {
       switch (e.type) {
         case 'sorted':
+          if (sortedPlayed) break;
+          sortedPlayed = true;
           this.sound.play('sorted', { progress: s.sortedCount / Math.max(1, s.totalTargets) });
           break;
         case 'combo':
           this.sound.play('combo', { multiplier: e.multiplier });
           break;
+        case 'wrong':
+          if (wrongPlayed) break;
+          wrongPlayed = true;
+          this.sound.play('wrong');
+          break;
         case 'comboLost':
         case 'timeBonus':
         case 'grab':
-        case 'wrong':
         case 'slipped':
         case 'won':
         case 'lost':
@@ -98,6 +112,22 @@ class App {
           break;
       }
     }
+  }
+
+  /** «Кучки»: все свои зёрна уже в копилках, но мешают чужие — подсказываем один раз. */
+  private maybeIntruderHint(s: Session): void {
+    if (this.intruderHintShown || !(s instanceof HeapSession) || s.status !== 'playing') return;
+    if (s.sortedCount < s.totalTargets || s.intruders.size === 0) return;
+    this.intruderHintShown = true;
+    this.toast(t().intruderHint, 3000);
+  }
+
+  private toast(text: string, ms: number): void {
+    const toast = el('div', 'toast');
+    toast.append(el('div', '', text));
+    document.getElementById('app')!.append(toast);
+    setTimeout(() => toast.classList.add('fade'), ms);
+    setTimeout(() => toast.remove(), ms + 600);
   }
 
   /** Последние секунды тикают раз в секунду. */
@@ -206,10 +236,22 @@ class App {
 
   // ——— уровни ———
 
+  private get mode(): GameMode {
+    return this.settings.mode;
+  }
+
+  /** Прохождение текущего режима: у «По зёрнышку» оно в корне прогресса, у «Кучек» — в progress.heap. */
+  private modeProgress(mode: GameMode = this.mode): ModeProgress {
+    return mode === 'heap' ? this.progress.heap : this.progress;
+  }
+
   private startLevel(index: number): void {
     const area = viewportArea();
-    const layout = layoutForViewport(area.w, area.h);
-    this.session = new Session(generateLevel(index), layout);
+    const base = layoutForViewport(area.w, area.h);
+    const config = generateLevelFor(this.mode, index);
+    const layout = this.mode === 'heap' ? heapLayout(base) : base;
+    this.session = this.mode === 'heap' ? new HeapSession(config, layout) : new Session(config, layout);
+    this.intruderHintShown = false;
     this.renderer.setLayout(layout);
     this.renderer.clearFx();
     this.acc = 0;
@@ -234,12 +276,13 @@ class App {
     let record = false;
     let coins = 0;
     if (won) {
-      const prevBest = this.progress.best[level] ?? 0;
+      const mp = this.modeProgress(s.config.mode);
+      const prevBest = mp.best[level] ?? 0;
       // Рекорд — только если до этого уровень уже проходили, иначе любой результат «рекорд».
       record = prevBest > 0 && s.score > prevBest;
-      this.progress.best[level] = Math.max(prevBest, s.score);
-      this.progress.stars[level] = Math.max(this.progress.stars[level] ?? 0, stars);
-      this.progress.unlocked = Math.max(this.progress.unlocked, level + 1);
+      mp.best[level] = Math.max(prevBest, s.score);
+      mp.stars[level] = Math.max(mp.stars[level] ?? 0, stars);
+      mp.unlocked = Math.max(mp.unlocked, level + 1);
       coins = coinsForWin(stars, s.score);
       this.progress.coins += coins;
       this.save();
@@ -285,12 +328,30 @@ class App {
     this.sound.setSuspended('pause', false);
     this.hud.classList.add('hidden');
     const tr = t();
-    const current = this.progress.unlocked;
+    const mp = this.modeProgress();
+    const current = mp.unlocked;
+
+    // Переключатель режимов: «Кучки» (как в ролике) и «По зёрнышку».
+    const modes = el('div', 'modes');
+    modes.setAttribute('role', 'tablist');
+    for (const m of ['heap', 'pick'] as const) {
+      const b = el('button', `mode-btn${m === this.mode ? ' active' : ''}`);
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', String(m === this.mode));
+      b.append(el('span', 'mode-name', tr.modes[m]), el('span', 'mode-desc', tr.modeDesc[m]));
+      b.addEventListener('click', () => {
+        if (this.settings.mode === m) return;
+        this.settings.mode = m;
+        saveSettings(this.settings);
+        this.showMenu();
+      });
+      modes.append(b);
+    }
 
     const grid = el('div', 'levels');
     for (let i = 1; i <= current; i++) {
       const b = el('button', 'level-btn');
-      b.append(el('span', 'level-num', String(i)), el('span', 'level-stars', starsText(this.progress.stars[i] ?? 0)));
+      b.append(el('span', 'level-num', String(i)), el('span', 'level-stars', starsText(mp.stars[i] ?? 0)));
       b.addEventListener('click', () => this.startLevel(i));
       grid.append(b);
     }
@@ -303,6 +364,7 @@ class App {
     this.showScreen(
       el('h1', 'title', tr.title),
       coinBalance(this.progress.coins),
+      modes,
       button(`${tr.play} · ${tr.level} ${current}`, () => this.startLevel(current), 'primary'),
       button(tr.shop, () => this.showShop()),
       soundBtn,
@@ -462,8 +524,12 @@ class App {
     const tr = t();
     const names = s.config.targets.map((k) => tr.grains[k]).join(', ');
     const toast = el('div', 'toast');
-    toast.append(el('div', 'toast-title', `${tr.level} ${level}`), el('div', '', tr.levelGoal(names)));
-    if (level === 1) toast.append(el('div', 'toast-hint', tr.hint));
+    const heap = s.config.mode === 'heap';
+    toast.append(
+      el('div', 'toast-title', `${tr.level} ${level}`),
+      el('div', '', heap ? tr.heapGoal(names) : tr.levelGoal(names)),
+    );
+    if (level === 1) toast.append(el('div', 'toast-hint', heap ? tr.heapHint : tr.hint));
     document.getElementById('app')!.append(toast);
     setTimeout(() => toast.classList.add('fade'), level === 1 ? 5000 : 2200);
     setTimeout(() => toast.remove(), level === 1 ? 5600 : 2800);
@@ -473,7 +539,9 @@ class App {
     const s = this.session;
     if (!s) return;
     const tr = t();
-    byId('hud-level').textContent = `${tr.level} ${s.config.index}`;
+    // На узком экране — короткая подпись, чтобы панель с таймером, ошибками и кнопками влезла.
+    const narrow = window.innerWidth < NARROW_HUD;
+    byId('hud-level').textContent = `${narrow ? tr.levelShort : tr.level} ${s.config.index}`;
     byId('hud-progress').textContent =
       `${s.sortedCount}/${s.totalTargets}` + (s.mistakes > 0 ? ` · ✕${s.mistakes}` : '');
     const left = s.timeLeft;

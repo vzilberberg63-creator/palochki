@@ -21,10 +21,16 @@ export interface Bounds {
   maxY: number;
 }
 
-/** Нечто, что раздвигает зёрна: кончики палочек при «разгребании». */
+/**
+ * Нечто, что раздвигает зёрна: кончики палочек при «разгребании».
+ * Если задан второй конец (x2, y2), толкатель — отрезок толщиной 2r (капсула),
+ * так палочки, прижатые к столу, сгребают зёрна всей длиной.
+ */
 export interface Pusher {
   x: number;
   y: number;
+  x2?: number;
+  y2?: number;
   r: number;
   vx: number;
   vy: number;
@@ -56,26 +62,7 @@ export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): numb
     b.spin *= angDamp;
   }
 
-  let contacts = 0;
-  for (const p of pushers) {
-    for (const b of bodies) {
-      const dx = b.x - p.x;
-      const dy = b.y - p.y;
-      const minD = p.r + b.r;
-      const d2 = dx * dx + dy * dy;
-      if (d2 >= minD * minD) continue;
-      const d = Math.sqrt(d2) || 0.0001;
-      const nx = dx / d;
-      const ny = dy / d;
-      contacts++;
-      b.x = p.x + nx * minD;
-      b.y = p.y + ny * minD;
-      // Зерно увлекается движением палочек и получает толчок наружу.
-      b.vx += (p.vx - b.vx) * 0.5 + nx * 40;
-      b.vy += (p.vy - b.vy) * 0.5 + ny * 40;
-      b.spin += (nx * p.vy - ny * p.vx) * 0.01;
-    }
-  }
+  const contacts = applyPushers(bodies, pushers);
 
   const all = kinematic ? [...bodies, kinematic] : bodies;
   for (let it = 0; it < iterations; it++) {
@@ -86,7 +73,48 @@ export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): numb
   return contacts;
 }
 
-function resolveCollisions(bodies: Body[], kinematic: Body | null): void {
+/**
+ * Выталкивает зёрна из толкателей и передаёт им скорость толкателя.
+ * Возвращает число касаний.
+ */
+export function applyPushers(bodies: Body[], pushers: readonly Pusher[], fling = 40, carry = 0.5): number {
+  let contacts = 0;
+  for (const p of pushers) {
+    const ax = p.x;
+    const ay = p.y;
+    const sx = (p.x2 ?? p.x) - ax;
+    const sy = (p.y2 ?? p.y) - ay;
+    const len2 = sx * sx + sy * sy;
+    for (const b of bodies) {
+      // Ближайшая к зерну точка толкателя.
+      let t = len2 > 0 ? ((b.x - ax) * sx + (b.y - ay) * sy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const cx = ax + sx * t;
+      const cy = ay + sy * t;
+      const dx = b.x - cx;
+      const dy = b.y - cy;
+      const minD = p.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD) continue;
+      const d = Math.sqrt(d2);
+      // Центр зерна точно на толкателе: выталкиваем по направлению движения толкателя.
+      const pv = Math.hypot(p.vx, p.vy) || 1;
+      const nx = d > 0.0001 ? dx / d : p.vx / pv;
+      const ny = d > 0.0001 ? dy / d : p.vy / pv;
+      contacts++;
+      b.x = cx + nx * minD;
+      b.y = cy + ny * minD;
+      // Зерно увлекается движением палочек и получает толчок наружу.
+      // carry — насколько зерно перенимает скорость толкателя (1 — едет вместе с ним).
+      b.vx += (p.vx - b.vx) * carry + nx * fling;
+      b.vy += (p.vy - b.vy) * carry + ny * fling;
+      b.spin += (nx * p.vy - ny * p.vx) * 0.01;
+    }
+  }
+  return contacts;
+}
+
+export function resolveCollisions(bodies: Body[], kinematic: Body | null = null): void {
   let maxR = 1;
   for (const b of bodies) if (b.r > maxR) maxR = b.r;
   const cell = maxR * 2;
@@ -159,7 +187,7 @@ function separate(a: Body, b: Body, kinematic: Body | null): void {
   }
 }
 
-function clampToBounds(b: Body, bounds: Bounds): void {
+export function clampToBounds(b: Body, bounds: Bounds): void {
   if (b.x < bounds.minX + b.r) {
     b.x = bounds.minX + b.r;
     b.vx = Math.abs(b.vx) * 0.3;

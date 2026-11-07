@@ -1,6 +1,7 @@
 import { GRAIN_KINDS, GrainKind } from '../core/grains';
 import { COMBO_MIN_SHOWN, COMBO_WINDOW, comboMultiplier } from '../core/session';
 import type { GameEvent, Grain, Session, Tray } from '../core/session';
+import { HeapSession } from '../core/heap';
 import { t } from '../i18n';
 import { ChopstickSkin, SKINS } from '../core/skins';
 import { Layout, SQUARE } from '../core/world';
@@ -45,6 +46,8 @@ interface RingFx {
 /** Направление от кончиков палочек к рукояткам (вверх-вправо). */
 const STICK_DIR = normalize(0.42, -0.91);
 const STICK_LEN = 520;
+/** В «Кучках» палочки лежат почти горизонтально над столом, видна только их часть. */
+const BLADE_STICK_LEN = 420;
 const FX_LIFE = 0.8;
 /** С этого момента время «горит»: полоска красная и пульсирует, часы тикают. */
 export const URGENT_SECONDS = 10;
@@ -163,7 +166,11 @@ export class Renderer {
     );
 
     this.drawTable();
-    for (const tray of session.trays) this.drawTray(tray, session);
+    const heap = session instanceof HeapSession ? session : null;
+    for (const tray of session.trays) {
+      if (heap) this.drawZone(tray);
+      else this.drawTray(tray, session);
+    }
 
     const scale = session.config.sizeScale;
     for (const g of session.grains) {
@@ -174,6 +181,7 @@ export class Renderer {
     }
     const held = session.heldGrain;
     if (held) this.drawGrain(held, scale * 1.05, true);
+    if (heap) this.drawIntruders(heap);
 
     this.drawTimeBar(session);
     this.drawCombo(session, dt);
@@ -356,9 +364,99 @@ export class Renderer {
 
   // ——— палочки ———
 
+  /** «Кучки»: копилка — плоский коврик на столе, зёрна заезжают на него. */
+  private drawZone(tray: Tray): void {
+    const ctx = this.ctx;
+    const { x, y, w, h } = tray;
+    const full = tray.count >= tray.total;
+    roundRect(ctx, x, y, w, h, 18);
+    ctx.fillStyle = full ? 'rgba(90, 158, 111, 0.16)' : 'rgba(201, 154, 98, 0.16)';
+    ctx.fill();
+    ctx.save();
+    ctx.setLineDash([10, 8]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = full ? 'rgba(46, 139, 87, 0.7)' : 'rgba(150, 105, 55, 0.55)';
+    ctx.stroke();
+    ctx.restore();
+
+    const kind = GRAIN_KINDS[tray.kind];
+    ctx.save();
+    ctx.translate(x + 30, y + 28);
+    ctx.rotate(-0.5);
+    this.drawGrainShape(kind, this.kindColors(kind, 0), 1.3, false);
+    ctx.restore();
+    ctx.fillStyle = full ? '#2e8b57' : '#7a5530';
+    ctx.font = `700 24px ${FONT}`;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${tray.count}/${tray.total}`, x + w - 18, y + 29);
+  }
+
+  /** Чужие зёрна в копилках обведены пульсирующим красным кругом. */
+  private drawIntruders(session: HeapSession): void {
+    if (session.intruders.size === 0) return;
+    const ctx = this.ctx;
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 160);
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(192, 57, 43, ${pulse})`;
+    for (const id of session.intruders) {
+      const g = session.grains[id];
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, g.r + 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * «Кучки»: палочки сведены лопаткой. Кончики — на краях лопатки, рукоятки тянутся назад,
+   * под кончиками — тень прижатой кромки.
+   */
+  private drawBlade(session: Session): void {
+    const c = session.chop;
+    const fx = c.bladeDirX;
+    const fy = c.bladeDirY;
+    const bx = -fy;
+    const by = fx;
+    const h = c.bladeHalf;
+    const curve = h * 0.8;
+    const ctx = this.ctx;
+
+    if (c.pressed) {
+      // Прижатая к столу кромка: мягкая тень по форме лопатки.
+      ctx.save();
+      ctx.strokeStyle = 'rgba(40, 25, 10, 0.18)';
+      ctx.lineWidth = 9;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(c.x - bx * h + fx * curve, c.y - by * h + fy * curve);
+      ctx.lineTo(c.x - bx * h * 0.45, c.y - by * h * 0.45);
+      ctx.lineTo(c.x + bx * h * 0.45, c.y + by * h * 0.45);
+      ctx.lineTo(c.x + bx * h + fx * curve, c.y + by * h + fy * curve);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    const alpha = c.pressed ? 1 : 0.55;
+    for (const side of [-1, 1]) {
+      // Кончик на краю лопатки; палочки тянутся назад к руке и сходятся, но не перекрещиваются.
+      const tipX = c.x + bx * side * h + fx * curve;
+      const tipY = c.y + by * side * h + fy * curve;
+      const endX = c.x - fx * BLADE_STICK_LEN + bx * side * h * 0.3;
+      const endY = c.y - fy * BLADE_STICK_LEN + by * side * h * 0.3;
+      drawStick(ctx, tipX, tipY, endX, endY, alpha, this.skin);
+    }
+  }
+
   private drawChopsticks(session: Session): void {
     const c = session.chop;
     if (!c.pressed && !c.hover) return;
+    if (session instanceof HeapSession) {
+      this.drawBlade(session);
+      return;
+    }
     const held = session.heldGrain;
     const grainW = held ? GRAIN_KINDS[held.kind].width * session.config.sizeScale : 0;
     // Раскрытые палочки шире зерна, сжатые — ровно обхватывают его.

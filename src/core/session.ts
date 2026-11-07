@@ -39,6 +39,10 @@ export interface Chopsticks {
   /** 0 — палочки раскрыты, 1 — сжаты. */
   pinch: number;
   heldId: number;
+  /** Режим «Кучки»: направление движения лопатки (единичный вектор) и её полуширина. */
+  bladeDirX: number;
+  bladeDirY: number;
+  bladeHalf: number;
 }
 
 export type GameEvent =
@@ -112,8 +116,8 @@ export class Session {
   /** События за кадр для звука и эффектов; внешний код их забирает. */
   events: GameEvent[] = [];
 
-  private readonly rng: Rng;
-  private readonly bounds: Bounds;
+  protected readonly rng: Rng;
+  protected readonly bounds: Bounds;
 
   constructor(config: LevelConfig, layout: Layout = SQUARE) {
     this.config = config;
@@ -144,6 +148,9 @@ export class Session {
       lift: 0,
       pinch: 0,
       heldId: -1,
+      bladeDirX: 0,
+      bladeDirY: -1,
+      bladeHalf: config.bladeHalfWidth,
     };
 
     this.spawnPile();
@@ -208,12 +215,7 @@ export class Session {
 
   update(dt: number): void {
     if (this.status !== 'playing') return;
-    this.elapsed += dt;
-
-    if (this.comboTimer > 0) {
-      this.comboTimer = Math.max(0, this.comboTimer - dt);
-      if (this.comboTimer === 0) this.breakCombo();
-    }
+    this.advanceTime(dt);
 
     const c = this.chop;
     const liftTarget = c.touch && this.heldGrain ? TOUCH_LIFT : 0;
@@ -247,6 +249,19 @@ export class Session {
     // Сглаживаем, чтобы шорох не трещал от кадра к кадру.
     this.rakeActivity += (target - this.rakeActivity) * Math.min(1, dt * 12);
 
+    this.checkTimeout();
+  }
+
+  /** Часы уровня и окно комбо. */
+  protected advanceTime(dt: number): void {
+    this.elapsed += dt;
+    if (this.comboTimer > 0) {
+      this.comboTimer = Math.max(0, this.comboTimer - dt);
+      if (this.comboTimer === 0) this.breakCombo();
+    }
+  }
+
+  protected checkTimeout(): void {
     const left = this.timeLeft;
     if (left !== null && left <= 0) {
       this.rakeActivity = 0;
@@ -275,7 +290,10 @@ export class Session {
 
     // Куча — эллипс, повторяющий пропорции стола: на вертикальном экране он вытянут вверх.
     const R = this.config.pileRadius;
-    const { table, pileCenter } = this.layout;
+    // В «Кучках» копилки стоят на столе — куча появляется только на свободной части.
+    const table = this.layout.pileArea ?? this.layout.table;
+    const settleBounds = this.layout.pileArea ?? this.bounds;
+    const { pileCenter } = this.layout;
     const tw = table.maxX - table.minX;
     const th = table.maxY - table.minY;
     const rx = Math.min(R, tw * 0.42);
@@ -301,7 +319,7 @@ export class Session {
 
     // Раскладываем кучу, чтобы зёрна не лежали друг в друге.
     for (let i = 0; i < SETTLE_STEPS; i++) {
-      stepPhysics(this.grains, 1 / 60, { damping: 30, bounds: this.bounds, iterations: 3 });
+      stepPhysics(this.grains, 1 / 60, { damping: 30, bounds: settleBounds, iterations: 3 });
     }
     for (const g of this.grains) {
       g.vx = 0;
@@ -310,11 +328,11 @@ export class Session {
     }
   }
 
-  private freeGrains(): Grain[] {
+  protected freeGrains(): Grain[] {
     return this.grains.filter((g) => g.state === 'free');
   }
 
-  private updateTip(dt: number): void {
+  protected updateTip(dt: number): void {
     const c = this.chop;
     const j = this.config.jitter;
     const t = this.elapsed;
@@ -400,7 +418,7 @@ export class Session {
     g.spin = this.rng.range(-12, 12);
   }
 
-  private addToCombo(g: Grain): void {
+  protected addToCombo(g: Grain): void {
     const prevMult = comboMultiplier(this.combo);
     this.combo = this.comboTimer > 0 ? this.combo + 1 : 1;
     this.comboTimer = COMBO_WINDOW;
@@ -418,7 +436,7 @@ export class Session {
     }
   }
 
-  private breakCombo(): void {
+  protected breakCombo(): void {
     if (this.combo >= COMBO_MIN_SHOWN) this.events.push({ type: 'comboLost', combo: this.combo });
     this.combo = 0;
     this.comboTimer = 0;

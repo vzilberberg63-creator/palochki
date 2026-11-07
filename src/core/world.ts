@@ -17,6 +17,8 @@ export interface Layout {
   /** Стол, по которому двигаются зёрна. */
   table: Bounds;
   pileCenter: { x: number; y: number };
+  /** Где появляется куча, если это не весь стол (в «Кучках» копилки стоят на самом столе). */
+  pileArea?: Bounds;
   /** Лотки идут в ряд снизу или столбиком справа. */
   trayDirection: 'row' | 'column';
 }
@@ -98,6 +100,19 @@ export function trayRects(kinds: readonly GrainKindId[], layout: Layout): Rect[]
   const w = Math.min(TRAY_MAX, avail / n);
   const startX = (layout.w - (w * n + TRAY_GAP * (n - 1))) / 2;
   return kinds.map((_, i) => ({ x: startX + i * (w + TRAY_GAP), y, w, h }));
+}
+
+/**
+ * Раскладка режима «Кучки»: стол занимает весь мир, а копилки стоят на нём там же,
+ * где в обычном режиме лотки. Зёрна в копилки не переносят, а сталкивают по столу.
+ */
+export function heapLayout(base: Layout): Layout {
+  const inset = 6;
+  return {
+    ...base,
+    table: { minX: inset, minY: inset, maxX: base.w - inset, maxY: base.h - inset },
+    pileArea: base.table,
+  };
 }
 
 export function rectContains(r: Rect, x: number, y: number): boolean {

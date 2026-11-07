@@ -7,13 +7,23 @@
 
 import { DEFAULT_SKIN, SkinId, isSkinId } from '../core/skins';
 
-export interface Progress {
+/** Прохождение одного режима. */
+export interface ModeProgress {
   /** Максимальный открытый уровень. */
   unlocked: number;
   /** Лучшее количество звёзд по уровням. */
   stars: Record<number, number>;
   /** Рекорд очков по уровням. */
   best: Record<number, number>;
+}
+
+/**
+ * Прогресс игрока. Поля верхнего уровня — режим «По зёрнышку» (он был первым,
+ * так старые сохранения читаются без миграции), heap — режим «Кучки».
+ * Монеты и палочки общие для обоих режимов.
+ */
+export interface Progress extends ModeProgress {
+  heap: ModeProgress;
   coins: number;
   /** Купленные стили палочек; стандартный есть всегда. */
   skins: SkinId[];
@@ -45,7 +55,16 @@ export interface Platform {
 }
 
 export function emptyProgress(): Progress {
-  return { unlocked: 1, stars: {}, best: {}, coins: 0, skins: [DEFAULT_SKIN], skin: DEFAULT_SKIN, rev: 0 };
+  return {
+    unlocked: 1,
+    stars: {},
+    best: {},
+    heap: { unlocked: 1, stars: {}, best: {} },
+    coins: 0,
+    skins: [DEFAULT_SKIN],
+    skin: DEFAULT_SKIN,
+    rev: 0,
+  };
 }
 const STORAGE_KEY = 'palochki.progress.v1';
 const SDK_TIMEOUT_MS = 4000;
@@ -91,16 +110,43 @@ declare global {
 export function normalizeProgress(raw: unknown): Progress {
   if (!raw || typeof raw !== 'object') return emptyProgress();
   const r = raw as Record<string, unknown>;
-  const int = (v: unknown, min: number) => (typeof v === 'number' && Number.isInteger(v) && v >= min ? v : null);
-  const unlocked = int(r.unlocked, 1) ?? 1;
-  const stars = levelMap(r.stars, (v) => Number.isInteger(v) && v >= 0 && v <= 3);
-  // Прогресс из прошлых версий игры не содержит рекордов, монет и стилей — это не ошибка.
-  const best = levelMap(r.best, (v) => Number.isInteger(v) && v >= 0);
+  // Прогресс из прошлых версий игры не содержит рекордов, режима «Кучки», монет и стилей — это не ошибка.
+  const { unlocked, stars, best } = normalizeMode(r);
+  const heap = normalizeMode(r.heap);
   const coins = int(r.coins, 0) ?? 0;
   const skins = ownedSkins(Array.isArray(r.skins) ? r.skins : []);
   const skin = isSkinId(r.skin) && skins.includes(r.skin) ? r.skin : DEFAULT_SKIN;
   const rev = int(r.rev, 0) ?? 0;
-  return { unlocked, stars, best, coins, skins, skin, rev };
+  return { unlocked, stars, best, heap, coins, skins, skin, rev };
+}
+
+function int(v: unknown, min: number): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min ? v : null;
+}
+
+function normalizeMode(raw: unknown): ModeProgress {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    unlocked: int(r.unlocked, 1) ?? 1,
+    stars: levelMap(r.stars, (v) => Number.isInteger(v) && v >= 0 && v <= 3),
+    best: levelMap(r.best, (v) => Number.isInteger(v) && v >= 0),
+  };
+}
+
+function mergeMode(a: ModeProgress, b: ModeProgress): ModeProgress {
+  const maxMap = (x: Record<number, number>, y: Record<number, number>) => {
+    const out: Record<number, number> = { ...x };
+    for (const [k, v] of Object.entries(y)) {
+      const lvl = Number(k);
+      out[lvl] = Math.max(out[lvl] ?? 0, v);
+    }
+    return out;
+  };
+  return {
+    unlocked: Math.max(a.unlocked, b.unlocked),
+    stars: maxMap(a.stars, b.stars),
+    best: maxMap(a.best, b.best),
+  };
 }
 
 /** Известные стили без повторов; стандартный всегда первый. */
@@ -143,20 +189,11 @@ function writeLocal(p: Progress): void {
  * иначе потраченные монеты «воскресали» бы.
  */
 export function mergeProgress(a: Progress, b: Progress): Progress {
-  const maxMap = (x: Record<number, number>, y: Record<number, number>) => {
-    const out: Record<number, number> = { ...x };
-    for (const [k, v] of Object.entries(y)) {
-      const lvl = Number(k);
-      out[lvl] = Math.max(out[lvl] ?? 0, v);
-    }
-    return out;
-  };
   const fresh = a.rev >= b.rev ? a : b;
   const skins = ownedSkins([...a.skins, ...b.skins]);
   return {
-    unlocked: Math.max(a.unlocked, b.unlocked),
-    stars: maxMap(a.stars, b.stars),
-    best: maxMap(a.best, b.best),
+    ...mergeMode(a, b),
+    heap: mergeMode(a.heap, b.heap),
     coins: fresh.coins,
     skins,
     skin: skins.includes(fresh.skin) ? fresh.skin : DEFAULT_SKIN,
