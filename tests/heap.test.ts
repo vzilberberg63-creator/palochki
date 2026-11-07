@@ -184,3 +184,111 @@ describe('Чужие зёрна в копилке', () => {
     expect(s.chop.pressed).toBe(true);
   });
 });
+
+describe('Левая и правая палочки', () => {
+  /** Два зерна впереди лопатки, идущей вверх: одно левее середины, другое правее. */
+  function setup() {
+    const s = new HeapSession(generateHeapLevel(1), layout);
+    const [a, b] = s.grains.filter((g) => g.kind === 'riceWhite');
+    only(s, [a, b], 0, 0);
+    a.x = 500 - 25;
+    b.x = 500 + 25;
+    a.y = b.y = 400;
+    return { s, a, b };
+  }
+
+  function strokeUp(s: HeapSession, sticks: { left: boolean; right: boolean }) {
+    s.pointerDown(500, 600, false, sticks);
+    for (let y = 600; y >= 250; y -= 8) {
+      s.pointerMove(500, y);
+      s.update(1 / 60);
+    }
+    s.pointerUp();
+  }
+
+  it('левая кнопка двигает только то, что под левой палочкой', () => {
+    const { s, a, b } = setup();
+    strokeUp(s, { left: true, right: false });
+    expect(a.y).toBeLessThan(300);
+    expect(b.y).toBeCloseTo(400, 0);
+  });
+
+  it('правая кнопка — только то, что под правой', () => {
+    const { s, a, b } = setup();
+    strokeUp(s, { left: false, right: true });
+    expect(b.y).toBeLessThan(300);
+    expect(a.y).toBeCloseTo(400, 0);
+  });
+
+  it('обе кнопки — совок, двигает оба зерна', () => {
+    const { s, a, b } = setup();
+    strokeUp(s, { left: true, right: true });
+    expect(a.y).toBeLessThan(300);
+    expect(b.y).toBeLessThan(300);
+  });
+
+  it('вторую кнопку можно нажать и отпустить посреди мазка', () => {
+    const s = new HeapSession(generateHeapLevel(1), layout);
+    s.pointerDown(500, 600, false, { left: true, right: false });
+    for (let y = 600; y >= 560; y -= 8) {
+      s.pointerMove(500, y);
+      s.update(1 / 60);
+    }
+    // Лопатка идёт вверх, левая палочка — на экране слева.
+    const leftIsNeg = s.chop.lowNeg;
+    expect(s.chop.lowNeg !== s.chop.lowPos).toBe(true);
+    s.drainEvents();
+    s.setSticks({ left: true, right: true });
+    expect(s.chop.lowNeg && s.chop.lowPos).toBe(true);
+    expect(s.drainEvents().some((e) => e.type === 'grab')).toBe(true);
+    s.setSticks({ left: true, right: false });
+    expect(s.chop.lowNeg).toBe(leftIsNeg);
+    expect(s.chop.lowPos).toBe(!leftIsNeg);
+    s.setSticks({ left: false, right: false });
+    expect(s.chop.pressed).toBe(false);
+  });
+
+  it('палочки не меняются местами, пока лопатка разворачивается в мазке', () => {
+    const s = new HeapSession(generateHeapLevel(1), layout);
+    s.pointerDown(500, 600, false, { left: true, right: false });
+    const side = s.chop.lowNeg ? 'neg' : 'pos';
+    // Уводим мазок вправо, затем вниз — лопатка поворачивается.
+    for (let x = 500; x <= 700; x += 8) {
+      s.pointerMove(x, 600);
+      s.update(1 / 60);
+    }
+    for (let y = 600; y <= 800; y += 8) {
+      s.pointerMove(700, y);
+      s.update(1 / 60);
+    }
+    expect(s.chop.lowNeg ? 'neg' : 'pos').toBe(side);
+  });
+});
+
+describe('Левая палочка после мазка в обратную сторону', () => {
+  it('левая кнопка остаётся левой, если прошлый мазок шёл вниз', () => {
+    const s = new HeapSession(generateHeapLevel(1), layout);
+    const [a, b] = s.grains.filter((g) => g.kind === 'riceWhite');
+    only(s, [a, b], 0, 0);
+    // Прошлый мазок вниз по пустому месту.
+    s.pointerDown(100, 100);
+    for (let y = 100; y <= 300; y += 8) {
+      s.pointerMove(100, y);
+      s.update(1 / 60);
+    }
+    s.pointerUp();
+    expect(s.chop.bladeDirY).toBeGreaterThan(0.9);
+
+    a.x = 500 - 25;
+    b.x = 500 + 25;
+    a.y = b.y = 400;
+    s.pointerDown(500, 600, false, { left: true, right: false });
+    for (let y = 600; y >= 250; y -= 8) {
+      s.pointerMove(500, y);
+      s.update(1 / 60);
+    }
+    s.pointerUp();
+    expect(a.y).toBeLessThan(300);
+    expect(b.y).toBeCloseTo(400, 0);
+  });
+});

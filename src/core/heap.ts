@@ -1,6 +1,6 @@
 import type { LevelConfig } from './level';
 import { Pusher, applyPushers, resolveCollisions, stepPhysics } from './physics';
-import { Grain, Session } from './session';
+import { Grain, Session, StickMask } from './session';
 import { Layout, Rect } from './world';
 
 /**
@@ -8,6 +8,9 @@ import { Layout, Rect } from './world';
  * Зёрна не берут по одному, а отделяют от общей кучи и целиком сталкивают в копилку.
  *
  * - Нажатие опускает палочки на стол, движение сгребает зёрна. Отпустили — палочки поднялись.
+ * - Палочки опускаются по отдельности: на мыши левая кнопка — левая палочка, правая — правая.
+ *   Одна палочка — узкий «нож», им отделяют зёрна от кучи; обе — совок, им сталкивают кучку.
+ *   На пальце опускаются обе.
  * - Лопатка всегда развёрнута поперёк движения и чуть вогнута, чтобы кучка не расползалась.
  * - Зерно нужного вида, заехавшее в свою копилку, остаётся там насовсем.
  * - Чужое зерно в копилке — ошибка; пока его не убрали, уровень не пройден.
@@ -36,6 +39,7 @@ const EJECT_RADIUS = 22;
 const EJECT_SPEED = 250;
 /** Слабый отброс: лопатка должна вести кучку, а не разбрасывать её. */
 const BLADE_FLING = 8;
+const BOTH: StickMask = { left: true, right: true };
 
 export class HeapSession extends Session {
   /** Чужие зёрна, которые сейчас лежат в копилках. */
@@ -44,6 +48,13 @@ export class HeapSession extends Session {
   private readonly everIntruded = new Set<number>();
   /** Путь, пройденный с момента касания стола. */
   private strokeDist = 0;
+  /**
+   * Какой стороне лопатки соответствует левая палочка (−1 или +1). Определяется в начале мазка
+   * по экрану и не меняется до конца, чтобы палочки не менялись местами, пока лопатка поворачивается.
+   */
+  private leftSide: -1 | 1 = -1;
+  /** Какие кнопки сейчас зажаты (левая/правая палочка). */
+  private mask: StickMask = { left: false, right: false };
 
   constructor(config: LevelConfig, layout: Layout) {
     super(config, layout);
@@ -55,7 +66,7 @@ export class HeapSession extends Session {
     }
   }
 
-  override pointerDown(x: number, y: number, touch = false): void {
+  override pointerDown(x: number, y: number, touch = false, sticks: StickMask = BOTH): void {
     if (this.status !== 'playing') return;
     const c = this.chop;
     c.pointerX = x;
@@ -67,8 +78,51 @@ export class HeapSession extends Session {
     this.events.push({ type: 'grab', x: c.x, y: c.y });
     // Нажатие на чужое зерно в копилке — выбрасываем его, а не начинаем сгребать.
     if (this.ejectAt(c.x, c.y, touch)) return;
-    c.pressed = true;
     this.strokeDist = 0;
+    this.leftSide = this.screenLeftSide();
+    this.applySticks(sticks);
+  }
+
+  /**
+   * Нажали или отпустили одну из кнопок посреди мазка (на мыши это приходит как движение
+   * с другим набором кнопок). Отпущены обе — палочки поднялись.
+   */
+  setSticks(sticks: StickMask): void {
+    if (this.status !== 'playing') return;
+    const c = this.chop;
+    if (!sticks.left && !sticks.right) {
+      this.pointerUp();
+      return;
+    }
+    const wasLeft = c.pressed && (this.leftSide < 0 ? c.lowNeg : c.lowPos);
+    const wasRight = c.pressed && (this.leftSide < 0 ? c.lowPos : c.lowNeg);
+    if (!c.pressed) {
+      this.strokeDist = 0;
+      this.leftSide = this.screenLeftSide();
+    }
+    // Каждая опущенная палочка стучит о стол.
+    if ((sticks.left && !wasLeft) || (sticks.right && !wasRight)) {
+      this.events.push({ type: 'grab', x: c.x, y: c.y });
+    }
+    this.applySticks(sticks);
+  }
+
+  private applySticks(sticks: StickMask): void {
+    this.mask = { ...sticks };
+    const c = this.chop;
+    const leftNeg = this.leftSide < 0;
+    c.lowNeg = leftNeg ? sticks.left : sticks.right;
+    c.lowPos = leftNeg ? sticks.right : sticks.left;
+    c.pressed = c.lowNeg || c.lowPos;
+  }
+
+  /** Какая сторона лопатки сейчас левее на экране. */
+  private screenLeftSide(): -1 | 1 {
+    const bx = -this.chop.bladeDirY;
+    const by = this.chop.bladeDirX;
+    if (Math.abs(bx) > 0.01) return bx > 0 ? -1 : 1;
+    // Лопатка стоит вертикально: «левой» считаем верхнюю палочку.
+    return by > 0 ? -1 : 1;
   }
 
   /** Выбросить ближайшее к точке чужое зерно из копилки обратно на стол, к куче. */
@@ -104,7 +158,10 @@ export class HeapSession extends Session {
   }
 
   override pointerUp(): void {
-    this.chop.pressed = false;
+    const c = this.chop;
+    c.pressed = false;
+    c.lowNeg = false;
+    c.lowPos = false;
     this.rakeActivity = 0;
   }
 
@@ -132,6 +189,12 @@ export class HeapSession extends Session {
     const dist = Math.hypot(mx, my);
     const snap = c.pressed && this.strokeDist < SNAP_DISTANCE;
     this.turnBlade(mx, my, dist, snap);
+    // Пока лопатка встаёт поперёк нового мазка, заново решаем, какая палочка левая:
+    // по направлению прошлого мазка левая кнопка могла бы достаться правой палочке.
+    if (snap && dist >= 0.5) {
+      this.leftSide = this.screenLeftSide();
+      this.applySticks(this.mask);
+    }
     if (c.pressed) this.strokeDist += dist;
 
     const free = this.freeGrains();
@@ -159,7 +222,10 @@ export class HeapSession extends Session {
     if (this.status === 'playing') this.checkTimeout();
   }
 
-  /** Отрезки лопатки в точке (x, y): середина поперёк движения и загнутые вперёд края. */
+  /**
+   * Отрезки лопатки в точке (x, y) для опущенных палочек. Каждая палочка — половина совка:
+   * от середины кромки до своего края, загнутого вперёд.
+   */
   bladeAt(x: number, y: number): Pusher[] {
     const c = this.chop;
     const fx = c.bladeDirX;
@@ -170,11 +236,15 @@ export class HeapSession extends Session {
     const inner = h * 0.45;
     const curve = h * BLADE_CURVE;
     const v = { r: BLADE_RADIUS, vx: c.vx, vy: c.vy };
-    return [
-      { x: x - bx * inner, y: y - by * inner, x2: x + bx * inner, y2: y + by * inner, ...v },
-      { x: x + bx * inner, y: y + by * inner, x2: x + bx * h + fx * curve, y2: y + by * h + fy * curve, ...v },
-      { x: x - bx * inner, y: y - by * inner, x2: x - bx * h + fx * curve, y2: y - by * h + fy * curve, ...v },
-    ];
+    const out: Pusher[] = [];
+    for (const side of [-1, 1] as const) {
+      if (!(side < 0 ? c.lowNeg : c.lowPos)) continue;
+      const ix = x + bx * inner * side;
+      const iy = y + by * inner * side;
+      out.push({ x, y, x2: ix, y2: iy, ...v });
+      out.push({ x: ix, y: iy, x2: x + bx * h * side + fx * curve, y2: y + by * h * side + fy * curve, ...v });
+    }
+    return out;
   }
 
   /** Лопатка плавно поворачивается поперёк направления движения. */

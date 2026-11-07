@@ -43,6 +43,18 @@ export interface Chopsticks {
   bladeDirX: number;
   bladeDirY: number;
   bladeHalf: number;
+  /**
+   * Режим «Кучки»: какие палочки прижаты к столу. Стороны — относительно лопатки:
+   * neg — палочка на стороне −(поперечный вектор), pos — на стороне +.
+   */
+  lowNeg: boolean;
+  lowPos: boolean;
+}
+
+/** Какие палочки опустить: на мыши — левая и правая кнопки, на пальце — обе сразу. */
+export interface StickMask {
+  left: boolean;
+  right: boolean;
 }
 
 export type GameEvent =
@@ -151,6 +163,8 @@ export class Session {
       bladeDirX: 0,
       bladeDirY: -1,
       bladeHalf: config.bladeHalfWidth,
+      lowNeg: false,
+      lowPos: false,
     };
 
     this.spawnPile();
@@ -190,7 +204,7 @@ export class Session {
     this.status = 'playing';
   }
 
-  pointerDown(x: number, y: number, touch = false): void {
+  pointerDown(x: number, y: number, touch = false, _sticks?: StickMask): void {
     if (this.status !== 'playing') return;
     this.chop.pointerX = x;
     this.chop.pointerY = y;

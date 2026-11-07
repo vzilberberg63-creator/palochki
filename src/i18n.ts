@@ -39,6 +39,7 @@ type Dict = {
   levelGoal: (kinds: string) => string;
   heapGoal: (kinds: string) => string;
   heapHint: string;
+  heapMouseHint: string;
   intruderHint: string;
   modes: Record<GameMode, string>;
   modeDesc: Record<GameMode, string>;
@@ -93,6 +94,7 @@ const ru: Dict = {
   heapHint:
     'Прижмите палочки к столу и ведите — они сгребают зёрна, как лопатка. Отделите нужные зёрна от кучи и столкните кучкой в копилку. Чужое зерно в копилке — нажмите на него, и палочки его выбросят.',
   intruderHint: 'В копилке чужие зёрна — нажмите на них, чтобы выбросить',
+  heapMouseHint: 'Левая кнопка мыши — левая палочка, правая — правая. Одной палочкой удобно отделять зёрна, двумя — сталкивать кучку.',
   modes: { heap: 'Кучки', pick: 'По зёрнышку' },
   modeDesc: { heap: 'сгребать палочками', pick: 'брать по одному' },
   grains: {
@@ -155,6 +157,7 @@ const en: Dict = {
   heapHint:
     'Press the chopsticks to the table and drag: they sweep grains like a scraper. Split the right grains off the pile and push them into the bin as a heap. Tap a foreign grain in a bin to toss it out.',
   intruderHint: 'Foreign grains in a bin: tap them to toss them out',
+  heapMouseHint: 'Left mouse button is the left chopstick, right button the right one. One stick splits grains apart, both push a heap.',
   modes: { heap: 'Heaps', pick: 'One by one' },
   modeDesc: { heap: 'sweep with chopsticks', pick: 'pick grains one at a time' },
   grains: {

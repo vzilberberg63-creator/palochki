@@ -423,30 +423,32 @@ export class Renderer {
     const curve = h * 0.8;
     const ctx = this.ctx;
 
-    if (c.pressed) {
-      // Прижатая к столу кромка: мягкая тень по форме лопатки.
+    // Под каждой опущенной палочкой — тень прижатой кромки (её половина совка).
+    for (const side of [-1, 1] as const) {
+      if (!(side < 0 ? c.lowNeg : c.lowPos)) continue;
       ctx.save();
       ctx.strokeStyle = 'rgba(40, 25, 10, 0.18)';
       ctx.lineWidth = 9;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.beginPath();
-      ctx.moveTo(c.x - bx * h + fx * curve, c.y - by * h + fy * curve);
-      ctx.lineTo(c.x - bx * h * 0.45, c.y - by * h * 0.45);
-      ctx.lineTo(c.x + bx * h * 0.45, c.y + by * h * 0.45);
-      ctx.lineTo(c.x + bx * h + fx * curve, c.y + by * h + fy * curve);
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(c.x + bx * h * 0.45 * side, c.y + by * h * 0.45 * side);
+      ctx.lineTo(c.x + bx * h * side + fx * curve, c.y + by * h * side + fy * curve);
       ctx.stroke();
       ctx.restore();
     }
 
-    const alpha = c.pressed ? 1 : 0.55;
-    for (const side of [-1, 1]) {
+    for (const side of [-1, 1] as const) {
       // Кончик на краю лопатки; палочки тянутся назад к руке и сходятся, но не перекрещиваются.
-      const tipX = c.x + bx * side * h + fx * curve;
-      const tipY = c.y + by * side * h + fy * curve;
+      // Поднятая палочка полупрозрачная и чуть приподнята — сдвинута к руке.
+      const down = side < 0 ? c.lowNeg : c.lowPos;
+      const lift = down ? 0 : 10;
+      const tipX = c.x + bx * side * h + fx * (curve - lift);
+      const tipY = c.y + by * side * h + fy * (curve - lift);
       const endX = c.x - fx * BLADE_STICK_LEN + bx * side * h * 0.3;
       const endY = c.y - fy * BLADE_STICK_LEN + by * side * h * 0.3;
-      drawStick(ctx, tipX, tipY, endX, endY, alpha, this.skin);
+      drawStick(ctx, tipX, tipY, endX, endY, down ? 1 : 0.5, this.skin);
     }
   }
 

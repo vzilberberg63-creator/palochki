@@ -1,7 +1,7 @@
 import { Sound } from './audio/sound';
 import { HeapSession } from './core/heap';
 import { GameMode, generateLevelFor } from './core/level';
-import { GameEvent, Session } from './core/session';
+import { GameEvent, Session, StickMask } from './core/session';
 import { setLang, t } from './i18n';
 import { ModeProgress, Platform, Progress, initPlatform } from './platform/platform';
 import { AD_COIN_MULTIPLIER, CONTINUE_SECONDS, SHOP_AD_COINS, coinsForWin } from './core/economy';
@@ -34,6 +34,8 @@ class App {
   /** Идёт показ рекламы за награду: кнопки не реагируют повторно. */
   private adBusy = false;
   private intruderHintShown = false;
+  /** Какие кнопки мыши были зажаты в прошлом событии. */
+  private lastButtons = 0;
   private readonly settings: Settings = loadSettings();
 
   constructor(
@@ -191,15 +193,25 @@ class App {
       c.setPointerCapture(e.pointerId);
       const p = toWorld(e);
       this.session.chop.hover = e.pointerType === 'mouse';
-      this.session.pointerDown(p.x, p.y, e.pointerType !== 'mouse');
+      this.lastButtons = e.buttons;
+      this.session.pointerDown(p.x, p.y, e.pointerType !== 'mouse', stickMask(e));
     });
     c.addEventListener('pointermove', (e) => {
       if (!this.session) return;
       const p = toWorld(e);
       this.session.chop.hover = e.pointerType === 'mouse';
       this.session.pointerMove(p.x, p.y);
+      // Вторую кнопку мыши, нажатую или отпущенную при зажатой первой, браузер присылает
+      // не как pointerdown/pointerup, а как движение с другим набором кнопок.
+      if (e.pointerType === 'mouse' && e.buttons !== this.lastButtons && this.session instanceof HeapSession) {
+        this.lastButtons = e.buttons;
+        if (this.state === 'playing') this.session.setSticks(stickMask(e));
+      }
     });
-    const up = () => this.session?.pointerUp();
+    const up = () => {
+      this.lastButtons = 0;
+      this.session?.pointerUp();
+    };
     c.addEventListener('pointerup', up);
     c.addEventListener('pointercancel', up);
     c.addEventListener('pointerleave', (e) => {
@@ -529,10 +541,14 @@ class App {
       el('div', 'toast-title', `${tr.level} ${level}`),
       el('div', '', heap ? tr.heapGoal(names) : tr.levelGoal(names)),
     );
-    if (level === 1) toast.append(el('div', 'toast-hint', heap ? tr.heapHint : tr.hint));
+    if (level === 1) {
+      toast.append(el('div', 'toast-hint', heap ? tr.heapHint : tr.hint));
+      // На компьютере с мышью — подсказка про две кнопки.
+      if (heap && window.matchMedia('(pointer: fine)').matches) toast.append(el('div', 'toast-hint', tr.heapMouseHint));
+    }
     document.getElementById('app')!.append(toast);
-    setTimeout(() => toast.classList.add('fade'), level === 1 ? 5000 : 2200);
-    setTimeout(() => toast.remove(), level === 1 ? 5600 : 2800);
+    setTimeout(() => toast.classList.add('fade'), level === 1 ? 7000 : 2200);
+    setTimeout(() => toast.remove(), level === 1 ? 7600 : 2800);
   }
 
   private updateHud(): void {
@@ -589,6 +605,16 @@ function button(text: string, onClick: () => void, variant = ''): HTMLElement {
   const b = el('button', `btn ${variant}`.trim(), text);
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** Левая кнопка мыши — левая палочка, правая — правая. Палец и перо опускают обе. */
+function stickMask(e: PointerEvent): StickMask {
+  if (e.pointerType !== 'mouse') return { left: true, right: true };
+  const left = (e.buttons & 1) !== 0;
+  const right = (e.buttons & 2) !== 0;
+  // Средняя кнопка и прочие — как обе палочки.
+  if (!left && !right) return { left: true, right: true };
+  return { left, right };
 }
 
 function coinBalance(coins: number): HTMLElement {
