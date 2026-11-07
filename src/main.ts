@@ -3,7 +3,9 @@ import { generateLevel } from './core/level';
 import { GameEvent, Session } from './core/session';
 import { setLang, t } from './i18n';
 import { Platform, Progress, initPlatform } from './platform/platform';
-import { Renderer, viewportArea } from './render/renderer';
+import { AD_COIN_MULTIPLIER, CONTINUE_SECONDS, SHOP_AD_COINS, coinsForWin } from './core/economy';
+import { SKINS, SkinId, skinById } from './core/skins';
+import { Renderer, URGENT_SECONDS, drawChopsticksPreview, viewportArea } from './render/renderer';
 import { layoutForViewport } from './core/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 
@@ -24,6 +26,10 @@ class App {
   private lastTime = 0;
   private acc = 0;
   private readonly sound = new Sound();
+  /** Последняя секунда, на которой прозвучал тик часов. */
+  private lastTick = 0;
+  /** Идёт показ рекламы за награду: кнопки не реагируют повторно. */
+  private adBusy = false;
   private readonly settings: Settings = loadSettings();
 
   constructor(
@@ -36,6 +42,7 @@ class App {
 
   async start(): Promise<void> {
     this.progress = await this.platform.loadProgress();
+    this.renderer.setSkin(skinById(this.progress.skin));
     this.bindInput();
     this.showMenu();
     this.platform.ready();
@@ -61,6 +68,7 @@ class App {
       const events = s.drainEvents();
       this.renderer.handleEvents(events);
       this.playSounds(events, s);
+      this.tickClock(s);
       this.updateHud();
       if (s.status !== 'playing') this.finishLevel();
     }
@@ -89,6 +97,41 @@ class App {
           this.sound.play(e.type);
           break;
       }
+    }
+  }
+
+  /** Последние секунды тикают раз в секунду. */
+  private tickClock(s: Session): void {
+    const left = s.timeLeft;
+    if (left === null || left <= 0 || left > URGENT_SECONDS || s.status !== 'playing') {
+      this.lastTick = 0;
+      return;
+    }
+    const sec = Math.ceil(left);
+    if (sec !== this.lastTick) {
+      this.lastTick = sec;
+      this.sound.play('tick', { secondsLeft: sec });
+    }
+  }
+
+  private save(): void {
+    this.progress.rev++;
+    void this.platform.saveProgress(this.progress);
+  }
+
+  /**
+   * Показать рекламу за награду. Игра и звук стоят, пока она идёт.
+   * Возвращает true, если награду надо выдать.
+   */
+  private async rewarded(): Promise<boolean> {
+    if (this.adBusy) return false;
+    this.adBusy = true;
+    this.sound.setSuspended('ad', true);
+    try {
+      return await this.platform.showRewarded();
+    } finally {
+      this.sound.setSuspended('ad', false);
+      this.adBusy = false;
     }
   }
 
@@ -170,6 +213,7 @@ class App {
     this.renderer.setLayout(layout);
     this.renderer.clearFx();
     this.acc = 0;
+    this.lastTick = 0;
     this.state = 'playing';
     this.sound.setSuspended('pause', false);
     this.hideScreen();
@@ -188,6 +232,7 @@ class App {
     const won = s.status === 'won';
     const stars = s.stars();
     let record = false;
+    let coins = 0;
     if (won) {
       const prevBest = this.progress.best[level] ?? 0;
       // Рекорд — только если до этого уровень уже проходили, иначе любой результат «рекорд».
@@ -195,9 +240,11 @@ class App {
       this.progress.best[level] = Math.max(prevBest, s.score);
       this.progress.stars[level] = Math.max(this.progress.stars[level] ?? 0, stars);
       this.progress.unlocked = Math.max(this.progress.unlocked, level + 1);
-      void this.platform.saveProgress(this.progress);
+      coins = coinsForWin(stars, s.score);
+      this.progress.coins += coins;
+      this.save();
     }
-    this.showResult(s, stars, record);
+    this.showResult(s, stars, record, coins);
   }
 
   private pause(): void {
@@ -255,7 +302,9 @@ class App {
 
     this.showScreen(
       el('h1', 'title', tr.title),
+      coinBalance(this.progress.coins),
       button(`${tr.play} · ${tr.level} ${current}`, () => this.startLevel(current), 'primary'),
+      button(tr.shop, () => this.showShop()),
       soundBtn,
       grid,
     );
@@ -272,12 +321,18 @@ class App {
     );
   }
 
-  private showResult(s: Session, stars: number, record: boolean): void {
+  private showResult(s: Session, stars: number, record: boolean, coins: number): void {
     const tr = t();
     const level = s.config.index;
     const won = s.status === 'won';
     const parts: HTMLElement[] = [el('h2', '', won ? tr.won : tr.lost)];
     if (won) parts.push(el('div', 'stars', starsText(stars)));
+
+    // Время вышло: один раз за попытку можно продолжить за рекламу.
+    if (!won && s.canContinue()) {
+      const cont = button(tr.continueAd(CONTINUE_SECONDS), () => void this.continueAfterAd(s, cont), 'primary ad');
+      parts.push(cont);
+    }
     const score = el('div', 'score');
     score.append(el('span', 'score-label', tr.score), el('span', 'score-value', String(s.score)));
     parts.push(score);
@@ -289,10 +344,116 @@ class App {
         `${tr.level} ${level} · ${tr.mistakes}: ${s.mistakes} · ${tr.bestCombo}: ${s.bestCombo}`,
       ),
     );
+    if (won && coins > 0) {
+      const earned = el('div', 'earned');
+      const amount = el('span', 'coin', `+${coins}`);
+      earned.append(el('span', 'score-label', tr.coins), amount);
+      parts.push(earned);
+      const extra = coins * (AD_COIN_MULTIPLIER - 1);
+      const dbl = button(tr.doubleCoinsAd(AD_COIN_MULTIPLIER), async () => {
+        if (!(await this.rewarded())) return;
+        this.progress.coins += extra;
+        this.save();
+        amount.textContent = `+${coins + extra}`;
+        dbl.remove();
+        this.sound.play('coins');
+      }, 'ad');
+      parts.push(dbl);
+    }
     if (won) parts.push(button(tr.next, () => void this.goNext(level), 'primary'));
-    parts.push(button(tr.retry, () => this.startLevel(level), won ? '' : 'primary'));
+    const canContinue = !won && s.canContinue();
+    parts.push(button(tr.retry, () => this.startLevel(level), won || canContinue ? '' : 'primary'));
     parts.push(button(tr.menu, () => this.showMenu()));
     this.showScreen(...parts);
+    if (won && coins > 0) this.sound.play('coins');
+  }
+
+  private async continueAfterAd(s: Session, btn: HTMLElement): Promise<void> {
+    btn.setAttribute('disabled', '');
+    if (!(await this.rewarded()) || this.session !== s) {
+      btn.removeAttribute('disabled');
+      return;
+    }
+    s.continueWithTime(CONTINUE_SECONDS);
+    this.state = 'playing';
+    this.lastTime = 0;
+    this.lastTick = 0;
+    this.hideScreen();
+    this.updateHud();
+    this.platform.gameplayStart();
+  }
+
+  // ——— магазин палочек ———
+
+  private showShop(): void {
+    this.state = 'menu';
+    const tr = t();
+    const header = el('div', 'shop-header');
+    header.append(el('h2', '', tr.shop), coinBalance(this.progress.coins));
+
+    const grid = el('div', 'shop-grid');
+    const previews: [HTMLCanvasElement, SkinId][] = [];
+    for (const skin of SKINS) {
+      const card = el('div', 'skin-card');
+      const owned = this.progress.skins.includes(skin.id);
+      const selected = this.progress.skin === skin.id;
+      card.classList.toggle('selected', selected);
+      const canvas = document.createElement('canvas');
+      canvas.className = 'skin-preview';
+      previews.push([canvas, skin.id]);
+      card.append(canvas, el('div', 'skin-name', tr.skins[skin.id]));
+
+      let action: HTMLElement;
+      if (selected) {
+        action = el('button', 'btn small', tr.selected);
+        action.setAttribute('disabled', '');
+      } else if (owned) {
+        action = button(tr.select, () => this.selectSkin(skin.id), 'small');
+      } else {
+        const affordable = this.progress.coins >= skin.price;
+        action = button(String(skin.price), () => this.buySkin(skin.id), `small coin-btn ${affordable ? 'primary' : ''}`);
+        if (!affordable) {
+          action.setAttribute('disabled', '');
+          action.title = tr.notEnough(skin.price - this.progress.coins);
+        }
+      }
+      card.append(action);
+      grid.append(card);
+    }
+
+    const adCoins = button(tr.shopAdCoins(SHOP_AD_COINS), async () => {
+      if (!(await this.rewarded())) return;
+      this.progress.coins += SHOP_AD_COINS;
+      this.save();
+      this.sound.play('coins');
+      this.showShop();
+    }, 'ad');
+
+    this.showScreen(header, el('p', 'muted', tr.shopHint), grid, adCoins, button(tr.back, () => this.showMenu()));
+    this.screen.querySelector('.card')?.classList.add('wide');
+    requestAnimationFrame(() => {
+      for (const [canvas, id] of previews) drawChopsticksPreview(canvas, skinById(id));
+    });
+  }
+
+  private buySkin(id: SkinId): void {
+    const skin = skinById(id);
+    if (this.progress.skins.includes(id) || this.progress.coins < skin.price) return;
+    this.progress.coins -= skin.price;
+    this.progress.skins.push(id);
+    this.progress.skin = id;
+    this.renderer.setSkin(skin);
+    this.save();
+    this.sound.play('purchase');
+    this.showShop();
+  }
+
+  private selectSkin(id: SkinId): void {
+    if (!this.progress.skins.includes(id)) return;
+    this.progress.skin = id;
+    this.renderer.setSkin(skinById(id));
+    this.save();
+    this.showShop();
   }
 
   private showGoal(level: number): void {
@@ -360,6 +521,10 @@ function button(text: string, onClick: () => void, variant = ''): HTMLElement {
   const b = el('button', `btn ${variant}`.trim(), text);
   b.addEventListener('click', onClick);
   return b;
+}
+
+function coinBalance(coins: number): HTMLElement {
+  return el('div', 'balance coin', String(coins));
 }
 
 function starsText(n: number): string {

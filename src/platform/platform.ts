@@ -5,6 +5,8 @@
  * Документация SDK: https://yandex.ru/dev/games/doc/ru/sdk/sdk-about
  */
 
+import { DEFAULT_SKIN, SkinId, isSkinId } from '../core/skins';
+
 export interface Progress {
   /** Максимальный открытый уровень. */
   unlocked: number;
@@ -12,6 +14,16 @@ export interface Progress {
   stars: Record<number, number>;
   /** Рекорд очков по уровням. */
   best: Record<number, number>;
+  coins: number;
+  /** Купленные стили палочек; стандартный есть всегда. */
+  skins: SkinId[];
+  /** Выбранный стиль. */
+  skin: SkinId;
+  /**
+   * Номер сохранения, растёт с каждой записью. Монеты могут убывать (покупки),
+   * поэтому при слиянии двух копий монеты берутся из более свежей, а не по максимуму.
+   */
+  rev: number;
 }
 
 export interface Platform {
@@ -23,6 +35,8 @@ export interface Platform {
   gameplayStop(): void;
   /** Полноэкранная реклама. Промис завершается, когда реклама закрыта или не показалась. */
   showInterstitial(): Promise<void>;
+  /** Реклама за награду. true — игрок досмотрел и награду надо выдать. */
+  showRewarded(): Promise<boolean>;
   loadProgress(): Promise<Progress>;
   saveProgress(p: Progress): Promise<void>;
   /** Платформа просит поставить игру на паузу (например, открылось окно Яндекса). */
@@ -30,7 +44,9 @@ export interface Platform {
   onResume(cb: () => void): void;
 }
 
-export const EMPTY_PROGRESS: Progress = { unlocked: 1, stars: {}, best: {} };
+export function emptyProgress(): Progress {
+  return { unlocked: 1, stars: {}, best: {}, coins: 0, skins: [DEFAULT_SKIN], skin: DEFAULT_SKIN, rev: 0 };
+}
 const STORAGE_KEY = 'palochki.progress.v1';
 const SDK_TIMEOUT_MS = 4000;
 
@@ -46,6 +62,14 @@ interface YaSdk {
     GameplayAPI?: { start(): void; stop(): void };
   };
   adv: {
+    showRewardedVideo(opts: {
+      callbacks: {
+        onOpen?: () => void;
+        onRewarded?: () => void;
+        onClose?: () => void;
+        onError?: (e: unknown) => void;
+      };
+    }): void;
     showFullscreenAdv(opts: {
       callbacks: {
         onOpen?: () => void;
@@ -65,13 +89,25 @@ declare global {
 }
 
 export function normalizeProgress(raw: unknown): Progress {
-  if (!raw || typeof raw !== 'object') return { unlocked: 1, stars: {}, best: {} };
-  const r = raw as Partial<Progress>;
-  const unlocked = Number.isInteger(r.unlocked) && (r.unlocked as number) >= 1 ? (r.unlocked as number) : 1;
+  if (!raw || typeof raw !== 'object') return emptyProgress();
+  const r = raw as Record<string, unknown>;
+  const int = (v: unknown, min: number) => (typeof v === 'number' && Number.isInteger(v) && v >= min ? v : null);
+  const unlocked = int(r.unlocked, 1) ?? 1;
   const stars = levelMap(r.stars, (v) => Number.isInteger(v) && v >= 0 && v <= 3);
-  // Прогресс из прошлых версий игры рекордов не содержит — это не ошибка.
+  // Прогресс из прошлых версий игры не содержит рекордов, монет и стилей — это не ошибка.
   const best = levelMap(r.best, (v) => Number.isInteger(v) && v >= 0);
-  return { unlocked, stars, best };
+  const coins = int(r.coins, 0) ?? 0;
+  const skins = ownedSkins(Array.isArray(r.skins) ? r.skins : []);
+  const skin = isSkinId(r.skin) && skins.includes(r.skin) ? r.skin : DEFAULT_SKIN;
+  const rev = int(r.rev, 0) ?? 0;
+  return { unlocked, stars, best, coins, skins, skin, rev };
+}
+
+/** Известные стили без повторов; стандартный всегда первый. */
+function ownedSkins(list: readonly unknown[]): SkinId[] {
+  const out: SkinId[] = [DEFAULT_SKIN];
+  for (const id of list) if (isSkinId(id) && !out.includes(id)) out.push(id);
+  return out;
 }
 
 function levelMap(raw: unknown, valid: (v: number) => boolean): Record<number, number> {
@@ -89,7 +125,7 @@ function readLocal(): Progress {
     const s = localStorage.getItem(STORAGE_KEY);
     return normalizeProgress(s ? JSON.parse(s) : null);
   } catch {
-    return { unlocked: 1, stars: {}, best: {} };
+    return emptyProgress();
   }
 }
 
@@ -101,7 +137,11 @@ function writeLocal(p: Progress): void {
   }
 }
 
-/** Из двух копий прогресса берём лучшее по каждому уровню. */
+/**
+ * Слияние локальной и облачной копии. Уровни, звёзды и рекорды — лучшее из двух.
+ * Купленные стили — объединение. Монеты и выбранный стиль — из более свежей копии,
+ * иначе потраченные монеты «воскресали» бы.
+ */
 export function mergeProgress(a: Progress, b: Progress): Progress {
   const maxMap = (x: Record<number, number>, y: Record<number, number>) => {
     const out: Record<number, number> = { ...x };
@@ -111,10 +151,16 @@ export function mergeProgress(a: Progress, b: Progress): Progress {
     }
     return out;
   };
+  const fresh = a.rev >= b.rev ? a : b;
+  const skins = ownedSkins([...a.skins, ...b.skins]);
   return {
     unlocked: Math.max(a.unlocked, b.unlocked),
     stars: maxMap(a.stars, b.stars),
     best: maxMap(a.best, b.best),
+    coins: fresh.coins,
+    skins,
+    skin: skins.includes(fresh.skin) ? fresh.skin : DEFAULT_SKIN,
+    rev: Math.max(a.rev, b.rev),
   };
 }
 
@@ -147,6 +193,29 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+const FAKE_AD_SECONDS = 2;
+
+function fakeAd(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'fake-ad';
+    const label = document.createElement('div');
+    box.append(label);
+    document.body.append(box);
+    let left = FAKE_AD_SECONDS;
+    const tick = () => {
+      label.textContent = `Здесь будет реклама Яндекса · ${left}`;
+      if (left-- <= 0) {
+        box.remove();
+        resolve(true);
+      } else {
+        setTimeout(tick, 1000);
+      }
+    };
+    tick();
+  });
+}
+
 function browserLang(): string {
   return (navigator.language || 'ru').slice(0, 2).toLowerCase();
 }
@@ -158,6 +227,10 @@ class LocalPlatform implements Platform {
   gameplayStart(): void {}
   gameplayStop(): void {}
   async showInterstitial(): Promise<void> {}
+  /** Вне Яндекса рекламы нет: показываем заглушку с отсчётом, чтобы сценарий можно было проверить. */
+  showRewarded(): Promise<boolean> {
+    return fakeAd();
+  }
   async loadProgress(): Promise<Progress> {
     return readLocal();
   }
@@ -201,6 +274,25 @@ class YandexPlatform implements Platform {
         });
       } catch {
         resolve();
+      }
+    });
+  }
+
+  showRewarded(): Promise<boolean> {
+    return new Promise((resolve) => {
+      let rewarded = false;
+      try {
+        this.sdk.adv.showRewardedVideo({
+          callbacks: {
+            onRewarded: () => {
+              rewarded = true;
+            },
+            onClose: () => resolve(rewarded),
+            onError: () => resolve(false),
+          },
+        });
+      } catch {
+        resolve(false);
       }
     });
   }

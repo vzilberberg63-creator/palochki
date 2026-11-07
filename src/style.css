@@ -260,3 +260,149 @@ body {
   font-size: 14px;
   opacity: 0.85;
 }
+
+/* ——— таймер: последние секунды ——— */
+.hud-item.warn {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-item.warn {
+    animation: none;
+  }
+}
+
+/* ——— монеты ——— */
+.coin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.coin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.coin::before,
+.coin-btn::before {
+  content: '';
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe7a3, #e0a526 60%, #b07a12);
+  box-shadow: inset 0 0 0 1.5px rgba(120, 80, 10, 0.5);
+  flex: none;
+}
+
+.balance {
+  font-size: 22px;
+  align-self: center;
+  background: var(--btn);
+  border-radius: 999px;
+  padding: 4px 14px;
+}
+
+.earned {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 28px;
+}
+
+/* ——— кнопки ——— */
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+.btn.ad:not(.primary) {
+  background: #e6eef6;
+  color: #234b73;
+}
+
+.btn.small {
+  padding: 8px 10px;
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+/* ——— магазин ——— */
+.card.wide {
+  width: min(620px, 100%);
+}
+
+.shop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shop-header .balance {
+  font-size: 18px;
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.skin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 14px;
+  background: #f6f0e4;
+  border: 2px solid transparent;
+  min-width: 0;
+}
+
+.skin-card.selected {
+  border-color: var(--accent);
+  background: #fbefe6;
+}
+
+.skin-preview {
+  width: 100%;
+  height: 84px;
+  display: block;
+}
+
+.skin-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* ——— заглушка рекламы вне Яндекса ——— */
+.fake-ad {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 16, 12, 0.88);
+  color: #fff;
+  font-size: 18px;
+  padding: 16px;
+  text-align: center;
+}

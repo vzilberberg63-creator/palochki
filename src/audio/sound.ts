@@ -22,6 +22,9 @@ export type SoundName =
   | 'slipped'
   | 'won'
   | 'lost'
+  | 'tick'
+  | 'coins'
+  | 'purchase'
   | 'ui';
 
 export interface PlayOptions {
@@ -29,6 +32,8 @@ export interface PlayOptions {
   progress?: number;
   /** Для 'combo': новый множитель, от него зависит высота аккорда. */
   multiplier?: number;
+  /** Для 'tick': сколько секунд осталось; последние три тикают выше и громче. */
+  secondsLeft?: number;
 }
 
 /** Ре-минорная пентатоника на две октавы (Гц): D4 F4 G4 A4 C5 D5 F5 G5 A5 C6 D6. */
@@ -157,6 +162,25 @@ export class Sound {
         break;
       case 'ui':
         this.click(t, 1800, 0.03, 0.5);
+        break;
+      case 'tick': {
+        // Часы: «тик-так» деревянным щелчком; на последних секундах выше и с тоном.
+        const sec = opts.secondsLeft ?? 10;
+        const last = sec <= 3;
+        this.click(t, sec % 2 === 0 ? 1500 : 1150, 0.04, last ? 0.7 : 0.45);
+        if (last) this.pluck(t, 880, 0.12, 0.12, 'sine', 4000);
+        break;
+      }
+      case 'coins':
+        // Монеты сыплются: несколько звонких нот вразнобой.
+        for (let i = 0; i < 5; i++) {
+          const f = PENTATONIC[7 + (i % 4)] * vary(0.01);
+          this.pluck(t + i * 0.055 + Math.random() * 0.02, f, 0.35, 0.1, 'sine', 7000);
+        }
+        break;
+      case 'purchase':
+        this.click(t, 2400, 0.03, 0.4);
+        [4, 6, 9].forEach((n, i) => this.pluck(t + 0.05 + i * 0.07, PENTATONIC[n], 0.7, 0.18));
         break;
     }
   }

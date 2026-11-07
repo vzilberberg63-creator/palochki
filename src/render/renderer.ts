@@ -2,6 +2,7 @@ import { GRAIN_KINDS, GrainKind } from '../core/grains';
 import { COMBO_MIN_SHOWN, COMBO_WINDOW, comboMultiplier } from '../core/session';
 import type { GameEvent, Grain, Session, Tray } from '../core/session';
 import { t } from '../i18n';
+import { ChopstickSkin, SKINS } from '../core/skins';
 import { Layout, SQUARE } from '../core/world';
 
 /** Место сверху под HUD и поле по краям, в CSS-пикселях. */
@@ -45,6 +46,8 @@ interface RingFx {
 const STICK_DIR = normalize(0.42, -0.91);
 const STICK_LEN = 520;
 const FX_LIFE = 0.8;
+/** С этого момента время «горит»: полоска красная и пульсирует, часы тикают. */
+export const URGENT_SECONDS = 10;
 const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 const COMBO_COLOR = '#c98a12';
 const COMBO_COLOR_LIGHT = '#f2c14e';
@@ -61,6 +64,7 @@ export class Renderer {
   private shake = 0;
   private comboPulse = 0;
   private comboAlpha = 0;
+  private skin: ChopstickSkin = SKINS[0];
   private layout: Layout = SQUARE;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -68,6 +72,10 @@ export class Renderer {
     if (!ctx) throw new Error('2d context unavailable');
     this.ctx = ctx;
     this.resize();
+  }
+
+  setSkin(skin: ChopstickSkin): void {
+    this.skin = skin;
   }
 
   /** Раскладка текущего уровня; масштаб пересчитывается под неё. */
@@ -167,6 +175,7 @@ export class Renderer {
     const held = session.heldGrain;
     if (held) this.drawGrain(held, scale * 1.05, true);
 
+    this.drawTimeBar(session);
     this.drawCombo(session, dt);
     this.drawChopsticks(session);
     this.drawFx(dt);
@@ -367,49 +376,8 @@ export class Renderer {
       const tipY = c.y + py * side * (gap / 2);
       const endX = c.x + STICK_DIR.x * STICK_LEN + px * side * (handleGap / 2);
       const endY = c.y + STICK_DIR.y * STICK_LEN + py * side * (handleGap / 2);
-      this.drawStick(tipX, tipY, endX, endY, alpha);
+      drawStick(this.ctx, tipX, tipY, endX, endY, alpha, this.skin);
     }
-  }
-
-  private drawStick(x0: number, y0: number, x1: number, y1: number, alpha: number): void {
-    const ctx = this.ctx;
-    const d = normalize(x1 - x0, y1 - y0);
-    const nx = -d.y;
-    const ny = d.x;
-    const tipW = 3;
-    const endW = 8;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.shadowColor = 'rgba(0,0,0,0.25)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetX = 6;
-    ctx.shadowOffsetY = 10;
-    ctx.beginPath();
-    ctx.moveTo(x0 + nx * tipW, y0 + ny * tipW);
-    ctx.lineTo(x1 + nx * endW, y1 + ny * endW);
-    ctx.lineTo(x1 - nx * endW, y1 - ny * endW);
-    ctx.lineTo(x0 - nx * tipW, y0 - ny * tipW);
-    ctx.closePath();
-    const grad = ctx.createLinearGradient(x0, y0, x1, y1);
-    grad.addColorStop(0, '#3a2414');
-    grad.addColorStop(0.75, '#2a1a10');
-    grad.addColorStop(0.76, '#8b1e1e');
-    grad.addColorStop(1, '#6e1414');
-    ctx.fillStyle = grad;
-    ctx.fill();
-    ctx.restore();
-
-    // Блик вдоль палочки.
-    ctx.save();
-    ctx.globalAlpha = alpha * 0.35;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x0 + nx * 1 + d.x * 12, y0 + ny * 1 + d.y * 12);
-    ctx.lineTo(x1 + nx * 3, y1 + ny * 3);
-    ctx.stroke();
-    ctx.restore();
   }
 
   // ——— эффекты ———
@@ -446,6 +414,38 @@ export class Renderer {
     this.floats = this.floats.filter((f) => f.age < FX_LIFE);
   }
 
+  /** Полоска времени вдоль верхнего края стола: убывает, краснеет и пульсирует в конце. */
+  private drawTimeBar(session: Session): void {
+    const limit = session.config.timeLimit;
+    const left = session.timeLeft;
+    if (limit === null || left === null) return;
+    const ctx = this.ctx;
+    const tb = this.layout.table;
+    const x = tb.minX + 18;
+    const y = tb.minY + 12;
+    const w = tb.maxX - tb.minX - 36;
+    const h = 9;
+    const frac = Math.max(0, Math.min(1, left / (limit + session.bonusTime)));
+
+    roundRect(ctx, x, y, w, h, h / 2);
+    ctx.fillStyle = 'rgba(59, 42, 26, 0.1)';
+    ctx.fill();
+    if (frac <= 0) return;
+
+    const urgent = left <= URGENT_SECONDS;
+    const color = urgent ? '#d0533f' : frac > 0.5 ? '#5a9e6f' : '#d9a63a';
+    ctx.save();
+    if (urgent) {
+      // Пульс раз в секунду, в такт тиканью.
+      const phase = left % 1;
+      ctx.globalAlpha = 0.65 + 0.35 * phase;
+    }
+    roundRect(ctx, x, y, Math.max(h, w * frac), h, h / 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+  }
+
   /** Плашка комбо в углу стола: множитель, длина серии и убывающая полоска окна. */
   private drawCombo(session: Session, dt: number): void {
     this.comboPulse = Math.max(0, this.comboPulse - dt * 3);
@@ -458,7 +458,7 @@ export class Renderer {
     const w = 230;
     const h = 64;
     const x = tb.minX + 18;
-    const y = tb.minY + 18;
+    const y = tb.minY + 30;
     const scale = 1 + this.comboPulse * 0.12;
 
     ctx.save();
@@ -516,4 +516,136 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+/**
+ * Одна палочка по стилю: от кончика (x0, y0) к рукоятке (x1, y1).
+ * Используется и в игре, и в превью магазина.
+ */
+export function drawStick(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  alpha: number,
+  skin: ChopstickSkin,
+  widthScale = 1,
+): void {
+  const d = normalize(x1 - x0, y1 - y0);
+  const nx = -d.y;
+  const ny = d.x;
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  const tipW = skin.tipWidth * widthScale;
+  const endW = skin.endWidth * widthScale;
+  const at = (f: number) => ({ x: x0 + (x1 - x0) * f, y: y0 + (y1 - y0) * f, w: tipW + (endW - tipW) * f });
+
+  const outline = () => {
+    ctx.beginPath();
+    ctx.moveTo(x0 + nx * tipW, y0 + ny * tipW);
+    ctx.lineTo(x1 + nx * endW, y1 + ny * endW);
+    ctx.lineTo(x1 - nx * endW, y1 - ny * endW);
+    ctx.lineTo(x0 - nx * tipW, y0 - ny * tipW);
+    ctx.closePath();
+  };
+
+  // Тело с тенью.
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = 'rgba(0,0,0,0.25)';
+  ctx.shadowBlur = 10 * widthScale;
+  ctx.shadowOffsetX = 6 * widthScale;
+  ctx.shadowOffsetY = 10 * widthScale;
+  outline();
+  const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const [pos, color] of skin.stops) grad.addColorStop(pos, color);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.restore();
+
+  // Узоры и кольца рисуем только внутри силуэта палочки.
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  outline();
+  ctx.clip();
+
+  const ring = (f: number, thickness: number, color: string) => {
+    const a = at(f - thickness / len / 2);
+    const b = at(f + thickness / len / 2);
+    ctx.beginPath();
+    ctx.moveTo(a.x + nx * (a.w + 1), a.y + ny * (a.w + 1));
+    ctx.lineTo(b.x + nx * (b.w + 1), b.y + ny * (b.w + 1));
+    ctx.lineTo(b.x - nx * (b.w + 1), b.y - ny * (b.w + 1));
+    ctx.lineTo(a.x - nx * (a.w + 1), a.y - ny * (a.w + 1));
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+
+  for (const [f, color] of skin.bands ?? []) ring(f, 5 * widthScale, color);
+
+  const pattern = skin.pattern;
+  if (pattern?.kind === 'nodes') {
+    // Коленца бамбука: тёмное кольцо и светлый край рядом.
+    for (const f of [0.28, 0.52, 0.76]) {
+      ring(f, 3 * widthScale, pattern.color);
+      ring(f + 0.012, 2 * widthScale, 'rgba(255, 240, 200, 0.5)');
+    }
+  } else if (pattern?.kind === 'stripes') {
+    // Насечки на рукоятке, чтобы палочки не скользили в руке.
+    for (let f = 0.72; f < 0.98; f += 0.022) ring(f, 1.6 * widthScale, pattern.color);
+  } else if (pattern?.kind === 'petals') {
+    // Лепестки сакуры вдоль рукоятки, попеременно по краям.
+    ctx.fillStyle = pattern.color;
+    [0.36, 0.5, 0.64, 0.78, 0.92].forEach((f, i) => {
+      const p = at(f);
+      const side = i % 2 === 0 ? 0.35 : -0.35;
+      const cx = p.x + nx * p.w * side;
+      const cy = p.y + ny * p.w * side;
+      const r = p.w * 0.38;
+      for (let k = 0; k < 5; k++) {
+        const ang = (k / 5) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(ang) * r * 0.7, cy + Math.sin(ang) * r * 0.7, r * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+  }
+  ctx.restore();
+
+  // Блик вдоль палочки: у металла ярче и с отражением на другой стороне.
+  ctx.save();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = alpha * (0.2 + skin.sheen * 0.5);
+  ctx.lineWidth = (1.2 + skin.sheen * 1.2) * widthScale;
+  ctx.beginPath();
+  ctx.moveTo(x0 + nx * tipW * 0.35 + d.x * 12 * widthScale, y0 + ny * tipW * 0.35 + d.y * 12 * widthScale);
+  ctx.lineTo(x1 + nx * endW * 0.4, y1 + ny * endW * 0.4);
+  ctx.stroke();
+  if (skin.sheen >= 0.7) {
+    ctx.globalAlpha = alpha * skin.sheen * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(x0 - nx * tipW * 0.5 + d.x * 20 * widthScale, y0 - ny * tipW * 0.5 + d.y * 20 * widthScale);
+    ctx.lineTo(x1 - nx * endW * 0.55, y1 - ny * endW * 0.55);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Превью пары палочек для карточки магазина. Рисует под размер canvas в CSS-пикселях. */
+export function drawChopsticksPreview(canvas: HTMLCanvasElement, skin: ChopstickSkin): void {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const w = canvas.clientWidth || 120;
+  const h = canvas.clientHeight || 90;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const s = Math.min(w, h) / 90;
+  // Кончики внизу слева, рукоятки вверху справа, палочки чуть сходятся к кончикам.
+  drawStick(ctx, w * 0.16, h * 0.86, w * 0.9, h * 0.1, 1, skin, s * 1.15);
+  drawStick(ctx, w * 0.1, h * 0.78, w * 0.8, h * 0.02 + 2, 1, skin, s * 1.15);
 }

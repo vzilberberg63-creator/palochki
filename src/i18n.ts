@@ -1,4 +1,5 @@
 import type { GrainKindId } from './core/grains';
+import type { SkinId } from './core/skins';
 
 type Dict = {
   title: string;
@@ -21,6 +22,17 @@ type Dict = {
   bestCombo: string;
   record: string;
   timeBonus: (s: number) => string;
+  coins: string;
+  shop: string;
+  shopHint: string;
+  select: string;
+  selected: string;
+  back: string;
+  notEnough: (n: number) => string;
+  continueAd: (s: number) => string;
+  doubleCoinsAd: (m: number) => string;
+  shopAdCoins: (n: number) => string;
+  skins: Record<SkinId, string>;
   hint: string;
   levelGoal: (kinds: string) => string;
   grains: Record<GrainKindId, string>;
@@ -45,6 +57,26 @@ const ru: Dict = {
   bestCombo: 'Лучшее комбо',
   record: 'Новый рекорд!',
   timeBonus: (n) => `+${n} с`,
+  coins: 'Монеты',
+  shop: 'Магазин палочек',
+  shopHint: 'Стиль меняет только вид палочек, на сложность он не влияет.',
+  select: 'Выбрать',
+  selected: 'Выбрано',
+  back: 'Назад',
+  notEnough: (n) => `Не хватает ${n}`,
+  continueAd: (n) => `▶ +${n} секунд за рекламу`,
+  doubleCoinsAd: (m) => `▶ Монеты ×${m} за рекламу`,
+  shopAdCoins: (n) => `▶ +${n} монет за рекламу`,
+  skins: {
+    classic: 'Классические',
+    bamboo: 'Бамбук',
+    redLacquer: 'Красный лак',
+    steel: 'Сталь',
+    sakura: 'Сакура',
+    jade: 'Нефрит',
+    blackGold: 'Чёрное золото',
+    golden: 'Золотые',
+  },
   soundOn: 'Звук: вкл',
   soundOff: 'Звук: выкл',
   hint: 'Нажмите на зерно, чтобы взять его палочками, и отпустите над нужным лотком. Ведите по пустому месту, чтобы разгрести кучу.',
@@ -80,6 +112,26 @@ const en: Dict = {
   bestCombo: 'Best combo',
   record: 'New record!',
   timeBonus: (n) => `+${n}s`,
+  coins: 'Coins',
+  shop: 'Chopstick shop',
+  shopHint: 'A style only changes how the chopsticks look; it does not affect difficulty.',
+  select: 'Select',
+  selected: 'Selected',
+  back: 'Back',
+  notEnough: (n) => `${n} more needed`,
+  continueAd: (n) => `▶ +${n} seconds for an ad`,
+  doubleCoinsAd: (m) => `▶ Coins ×${m} for an ad`,
+  shopAdCoins: (n) => `▶ +${n} coins for an ad`,
+  skins: {
+    classic: 'Classic',
+    bamboo: 'Bamboo',
+    redLacquer: 'Red lacquer',
+    steel: 'Steel',
+    sakura: 'Sakura',
+    jade: 'Jade',
+    blackGold: 'Black gold',
+    golden: 'Golden',
+  },
   soundOn: 'Sound: on',
   soundOff: 'Sound: off',
   hint: 'Press on a grain to pick it up with the chopsticks and release it over the matching tray. Drag across empty space to spread the pile.',

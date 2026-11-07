@@ -12,7 +12,7 @@ export interface LevelConfig {
   fillers: GrainKindId[];
   /** Количество зёрен каждого вида. */
   counts: Partial<Record<GrainKindId, number>>;
-  /** Лимит времени в секундах, null — без таймера. */
+  /** Лимит времени в секундах, null — без таймера (сейчас таймер есть у всех уровней). */
   timeLimit: number | null;
   /** Масштаб зёрен: меньше — мельче и труднее попасть. */
   sizeScale: number;
@@ -34,6 +34,9 @@ export function difficulty(index: number): number {
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** Секунд на зерно на обучающих уровнях: время есть, но спешить можно не сильно. */
+const TUTORIAL_SECONDS_PER_GRAIN = 5;
 
 /** Первые уровни задаём вручную как обучение, дальше генерация. */
 const TUTORIAL: Record<number, Pick<LevelConfig, 'targets' | 'fillers' | 'counts'>> = {
@@ -96,8 +99,9 @@ export function generateLevel(index: number): LevelConfig {
   }
 
   const targetGrains = targets.reduce((s, k) => s + (counts[k] ?? 0), 0);
-  // Таймер включается с 4-го уровня; на зерно со временем отводится всё меньше секунд.
-  const timeLimit = index >= 4 ? Math.round(12 + targetGrains * lerp(3.6, 1.7, d)) : null;
+  // Таймер на каждом уровне. На обучении он щедрый, дальше на зерно отводится всё меньше секунд.
+  const perGrain = TUTORIAL[index] ? TUTORIAL_SECONDS_PER_GRAIN : lerp(3.6, 1.7, d);
+  const timeLimit = Math.round(12 + targetGrains * perGrain);
 
   return {
     index,

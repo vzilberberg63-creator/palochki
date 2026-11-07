@@ -100,8 +100,10 @@ export class Session {
   bestCombo = 0;
   /** Сколько секунд серия ещё ждёт следующего зерна. */
   comboTimer = 0;
-  /** Время, добавленное за серии. */
+  /** Время, добавленное за серии и за рекламу. */
   bonusTime = 0;
+  /** Игрок уже продлевал эту попытку за рекламу. */
+  continued = false;
   /**
    * Насколько активно палочки сейчас разгребают кучу: 0 — нет, 1 — быстро и сквозь много зёрен.
    * Нужна для непрерывного шороха.
@@ -162,7 +164,23 @@ export class Session {
     const limit = this.config.timeLimit;
     if (limit === null) return this.mistakes === 0 ? 3 : this.mistakes <= 2 ? 2 : 1;
     const left = (this.timeLeft ?? 0) / limit;
-    return 1 + (this.mistakes <= 2 ? 1 : 0) + (left >= 0.3 ? 1 : 0);
+    const stars = 1 + (this.mistakes <= 2 ? 1 : 0) + (left >= 0.3 ? 1 : 0);
+    // Продление за рекламу помогает пройти, но не даёт три звезды.
+    return this.continued ? Math.min(2, stars) : stars;
+  }
+
+  /** Можно ли продлить попытку: время вышло, и продления ещё не было. */
+  canContinue(): boolean {
+    return this.status === 'lost' && !this.continued && this.config.timeLimit !== null;
+  }
+
+  /** Продолжить проигранную по времени попытку с seconds секундами на часах. */
+  continueWithTime(seconds: number): void {
+    if (!this.canContinue()) return;
+    const limit = this.config.timeLimit!;
+    this.bonusTime = this.elapsed - limit + seconds;
+    this.continued = true;
+    this.status = 'playing';
   }
 
   pointerDown(x: number, y: number, touch = false): void {

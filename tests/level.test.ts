@@ -29,11 +29,12 @@ describe('generateLevel', () => {
     expect(generateLevel(17)).toEqual(generateLevel(17));
   });
 
-  it('первый уровень — обучение без таймера', () => {
+  it('первый уровень — обучение с щедрым таймером', () => {
     const l = generateLevel(1);
     expect(l.targets).toEqual(['riceBlack']);
     expect(l.fillers).toEqual(['riceWhite']);
-    expect(l.timeLimit).toBeNull();
+    // 6 зёрен: по 5 секунд на зерно и 12 секунд запаса.
+    expect(l.timeLimit).toBe(42);
     expect(l.jitter).toBe(0);
     expect(l.slip).toBe(0);
   });
@@ -68,9 +69,8 @@ describe('generateLevel', () => {
     }
   });
 
-  it('целей становится больше, таймер появляется с 4-го уровня', () => {
-    expect(generateLevel(3).timeLimit).toBeNull();
-    expect(generateLevel(4).timeLimit).not.toBeNull();
+  it('целей становится больше, таймер есть на каждом уровне', () => {
+    for (let i = 1; i <= 60; i++) expect(generateLevel(i).timeLimit).toBeGreaterThan(0);
     expect(generateLevel(40).targets.length).toBeGreaterThan(generateLevel(5).targets.length);
   });
 });

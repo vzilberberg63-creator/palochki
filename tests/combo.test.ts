@@ -7,7 +7,7 @@ import {
   TIME_BONUS_SECONDS,
   comboMultiplier,
 } from '../src/core/session';
-import { mergeProgress, normalizeProgress } from '../src/platform/platform';
+import { emptyProgress, mergeProgress, normalizeProgress } from '../src/platform/platform';
 
 /** Кладёт зерно сразу в лоток (или в чужой лоток), минуя физику переноса. */
 function drop(s: Session, g: Grain, trayIndex: number): void {
@@ -86,15 +86,19 @@ describe('Комбо', () => {
   });
 
   it('без таймера бонуса времени нет', () => {
-    const s = new Session(generateLevel(2));
+    const s = new Session({ ...generateLevel(2), timeLimit: null });
     for (let i = 0; i < 5; i++) drop(s, nextTarget(s), 0);
     expect(s.bonusTime).toBe(0);
   });
 });
 
 describe('Рекорды в прогрессе', () => {
-  it('старый прогресс без рекордов читается', () => {
-    expect(normalizeProgress({ unlocked: 4, stars: { 1: 3 } })).toEqual({ unlocked: 4, stars: { 1: 3 }, best: {} });
+  it('старый прогресс без рекордов, монет и стилей читается', () => {
+    expect(normalizeProgress({ unlocked: 4, stars: { 1: 3 } })).toEqual({
+      ...emptyProgress(),
+      unlocked: 4,
+      stars: { 1: 3 },
+    });
   });
 
   it('мусор отбрасывается', () => {
@@ -102,8 +106,11 @@ describe('Рекорды в прогрессе', () => {
   });
 
   it('при слиянии берётся лучшее по каждому уровню', () => {
-    const a = { unlocked: 3, stars: { 1: 2 }, best: { 1: 100, 2: 50 } };
-    const b = { unlocked: 2, stars: { 1: 3 }, best: { 1: 80, 2: 70 } };
-    expect(mergeProgress(a, b)).toEqual({ unlocked: 3, stars: { 1: 3 }, best: { 1: 100, 2: 70 } });
+    const a = { ...emptyProgress(), unlocked: 3, stars: { 1: 2 }, best: { 1: 100, 2: 50 } };
+    const b = { ...emptyProgress(), unlocked: 2, stars: { 1: 3 }, best: { 1: 80, 2: 70 } };
+    const m = mergeProgress(a, b);
+    expect(m.unlocked).toBe(3);
+    expect(m.stars).toEqual({ 1: 3 });
+    expect(m.best).toEqual({ 1: 100, 2: 70 });
   });
 });
