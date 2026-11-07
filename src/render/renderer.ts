@@ -1,5 +1,7 @@
 import { GRAIN_KINDS, GrainKind } from '../core/grains';
+import { COMBO_MIN_SHOWN, COMBO_WINDOW, comboMultiplier } from '../core/session';
 import type { GameEvent, Grain, Session, Tray } from '../core/session';
+import { t } from '../i18n';
 import { Layout, SQUARE } from '../core/world';
 
 /** Место сверху под HUD и поле по краям, в CSS-пикселях. */
@@ -28,6 +30,8 @@ interface FloatFx {
   text: string;
   color: string;
   age: number;
+  /** Размер шрифта в единицах мира. */
+  size: number;
 }
 
 interface RingFx {
@@ -41,6 +45,9 @@ interface RingFx {
 const STICK_DIR = normalize(0.42, -0.91);
 const STICK_LEN = 520;
 const FX_LIFE = 0.8;
+const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+const COMBO_COLOR = '#c98a12';
+const COMBO_COLOR_LIGHT = '#f2c14e';
 
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -52,6 +59,8 @@ export class Renderer {
   private floats: FloatFx[] = [];
   private rings: RingFx[] = [];
   private shake = 0;
+  private comboPulse = 0;
+  private comboAlpha = 0;
   private layout: Layout = SQUARE;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -95,10 +104,24 @@ export class Renderer {
   handleEvents(events: readonly GameEvent[]): void {
     for (const e of events) {
       if (e.type === 'sorted') {
-        this.floats.push({ x: e.x, y: e.y - 20, text: '+1', color: '#2e8b57', age: 0 });
-        this.rings.push({ x: e.x, y: e.y, color: '46, 139, 87', age: 0 });
+        const boosted = e.points > 10;
+        this.floats.push({
+          x: e.x,
+          y: e.y - 20,
+          text: `+${e.points}`,
+          color: boosted ? COMBO_COLOR : '#2e8b57',
+          age: 0,
+          size: boosted ? 38 : 32,
+        });
+        this.rings.push({ x: e.x, y: e.y, color: boosted ? '201, 138, 18' : '46, 139, 87', age: 0 });
+      } else if (e.type === 'combo') {
+        this.floats.push({ x: e.x, y: e.y - 70, text: `×${e.multiplier}!`, color: COMBO_COLOR, age: 0, size: 56 });
+        this.rings.push({ x: e.x, y: e.y, color: '201, 138, 18', age: -0.1 });
+        this.comboPulse = 1;
+      } else if (e.type === 'timeBonus') {
+        this.floats.push({ x: e.x + 60, y: e.y - 40, text: t().timeBonus(e.seconds), color: '#2f6fb0', age: 0, size: 30 });
       } else if (e.type === 'wrong') {
-        this.floats.push({ x: e.x, y: e.y - 20, text: '✕', color: '#c0392b', age: 0 });
+        this.floats.push({ x: e.x, y: e.y - 20, text: '✕', color: '#c0392b', age: 0, size: 34 });
         this.shake = 0.25;
       } else if (e.type === 'slipped') {
         this.rings.push({ x: e.x, y: e.y, color: '192, 57, 43', age: 0 });
@@ -144,6 +167,7 @@ export class Renderer {
     const held = session.heldGrain;
     if (held) this.drawGrain(held, scale * 1.05, true);
 
+    this.drawCombo(session, dt);
     this.drawChopsticks(session);
     this.drawFx(dt);
   }
@@ -394,6 +418,7 @@ export class Renderer {
     const ctx = this.ctx;
     for (const r of this.rings) {
       r.age += dt;
+      if (r.age < 0) continue;
       const t = r.age / FX_LIFE;
       ctx.beginPath();
       ctx.arc(r.x, r.y, 10 + t * 40, 0, Math.PI * 2);
@@ -405,11 +430,15 @@ export class Renderer {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 34px system-ui, -apple-system, "Segoe UI", sans-serif';
     for (const f of this.floats) {
       f.age += dt;
       const t = f.age / FX_LIFE;
+      ctx.font = `800 ${f.size}px ${FONT}`;
       ctx.globalAlpha = Math.max(0, 1 - t);
+      // Светлая обводка, чтобы цифры читались поверх тёмных зёрен.
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(255, 253, 248, 0.9)';
+      ctx.strokeText(f.text, f.x, f.y - t * 50);
       ctx.fillStyle = f.color;
       ctx.fillText(f.text, f.x, f.y - t * 50);
     }
@@ -417,10 +446,60 @@ export class Renderer {
     this.floats = this.floats.filter((f) => f.age < FX_LIFE);
   }
 
+  /** Плашка комбо в углу стола: множитель, длина серии и убывающая полоска окна. */
+  private drawCombo(session: Session, dt: number): void {
+    this.comboPulse = Math.max(0, this.comboPulse - dt * 3);
+    const visible = session.combo >= COMBO_MIN_SHOWN && session.status === 'playing';
+    this.comboAlpha += ((visible ? 1 : 0) - this.comboAlpha) * Math.min(1, dt * 10);
+    if (this.comboAlpha < 0.02) return;
+
+    const ctx = this.ctx;
+    const tb = this.layout.table;
+    const w = 230;
+    const h = 64;
+    const x = tb.minX + 18;
+    const y = tb.minY + 18;
+    const scale = 1 + this.comboPulse * 0.12;
+
+    ctx.save();
+    ctx.globalAlpha = this.comboAlpha;
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-w / 2, -h / 2);
+
+    roundRect(ctx, 0, 0, w, h, 18);
+    ctx.fillStyle = 'rgba(59, 42, 26, 0.9)';
+    ctx.fill();
+
+    const mult = comboMultiplier(Math.max(session.combo, 1));
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = COMBO_COLOR_LIGHT;
+    ctx.font = `800 34px ${FONT}`;
+    ctx.fillText(`×${mult}`, 16, 28);
+    ctx.fillStyle = '#fffdf8';
+    ctx.font = `600 20px ${FONT}`;
+    ctx.fillText(`${t().combo} ${session.combo}`, 82, 28);
+
+    // Полоска: сколько ещё ждёт серия.
+    const frac = Math.max(0, session.comboTimer / COMBO_WINDOW);
+    roundRect(ctx, 16, h - 14, w - 32, 6, 3);
+    ctx.fillStyle = 'rgba(255, 253, 248, 0.2)';
+    ctx.fill();
+    if (frac > 0) {
+      roundRect(ctx, 16, h - 14, (w - 32) * frac, 6, 3);
+      ctx.fillStyle = frac < 0.3 ? '#e2725b' : COMBO_COLOR_LIGHT;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   clearFx(): void {
     this.floats = [];
     this.rings = [];
     this.shake = 0;
+    this.comboPulse = 0;
+    this.comboAlpha = 0;
   }
 }
 

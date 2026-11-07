@@ -43,7 +43,13 @@ export interface Chopsticks {
 
 export type GameEvent =
   | { type: 'grab'; x: number; y: number }
-  | { type: 'sorted'; x: number; y: number; kind: GrainKindId }
+  | { type: 'sorted'; x: number; y: number; kind: GrainKindId; combo: number; points: number }
+  /** Множитель комбо вырос. */
+  | { type: 'combo'; x: number; y: number; multiplier: number }
+  /** Серия от COMBO_MIN_SHOWN зёрен прервалась ошибкой или паузой. */
+  | { type: 'comboLost'; combo: number }
+  /** За серию на уровне с таймером добавлено время. */
+  | { type: 'timeBonus'; x: number; y: number; seconds: number }
   | { type: 'wrong'; x: number; y: number }
   | { type: 'slipped'; x: number; y: number }
   | { type: 'won' }
@@ -57,6 +63,24 @@ export const TOUCH_LIFT = 70;
 /** Палец менее точен, чем мышь: добавка к радиусу захвата. */
 export const TOUCH_GRAB_BONUS = 10;
 const SLIP_SPEED = 700;
+
+/** Сколько секунд после верного переноса серия ждёт следующего. */
+export const COMBO_WINDOW = 3.5;
+/** Очки за зерно до умножения. */
+export const POINTS_PER_GRAIN = 10;
+/** С какой длины серия считается комбо и показывается игроку. */
+export const COMBO_MIN_SHOWN = 3;
+/** Каждые столько зёрен подряд на уровне с таймером — бонус времени. */
+export const TIME_BONUS_EVERY = 5;
+export const TIME_BONUS_SECONDS = 2;
+
+/** Множитель очков по длине серии: ×1, ×2 с 3-го, ×3 с 6-го, ×4 с 10-го зерна. */
+export function comboMultiplier(combo: number): number {
+  if (combo >= 10) return 4;
+  if (combo >= 6) return 3;
+  if (combo >= COMBO_MIN_SHOWN) return 2;
+  return 1;
+}
 const SETTLE_STEPS = 90;
 
 export class Session {
@@ -70,6 +94,14 @@ export class Session {
   elapsed = 0;
   mistakes = 0;
   sortedCount = 0;
+  score = 0;
+  /** Текущая серия верных переносов подряд. */
+  combo = 0;
+  bestCombo = 0;
+  /** Сколько секунд серия ещё ждёт следующего зерна. */
+  comboTimer = 0;
+  /** Время, добавленное за серии. */
+  bonusTime = 0;
   /**
    * Насколько активно палочки сейчас разгребают кучу: 0 — нет, 1 — быстро и сквозь много зёрен.
    * Нужна для непрерывного шороха.
@@ -117,7 +149,7 @@ export class Session {
 
   get timeLeft(): number | null {
     if (this.config.timeLimit === null) return null;
-    return Math.max(0, this.config.timeLimit - this.elapsed);
+    return Math.max(0, this.config.timeLimit + this.bonusTime - this.elapsed);
   }
 
   get heldGrain(): Grain | null {
@@ -159,6 +191,11 @@ export class Session {
   update(dt: number): void {
     if (this.status !== 'playing') return;
     this.elapsed += dt;
+
+    if (this.comboTimer > 0) {
+      this.comboTimer = Math.max(0, this.comboTimer - dt);
+      if (this.comboTimer === 0) this.breakCombo();
+    }
 
     const c = this.chop;
     const liftTarget = c.touch && this.heldGrain ? TOUCH_LIFT : 0;
@@ -319,7 +356,7 @@ export class Session {
       g.vx = g.vy = g.spin = 0;
       tray.count++;
       this.sortedCount++;
-      this.events.push({ type: 'sorted', x: g.x, y: g.y, kind: g.kind });
+      this.addToCombo(g);
       if (this.sortedCount >= this.totalTargets) {
         this.status = 'won';
         this.events.push({ type: 'won' });
@@ -329,6 +366,7 @@ export class Session {
 
     // Не тот лоток: ошибка, зерно отскакивает обратно на стол.
     this.mistakes++;
+    this.breakCombo();
     this.events.push({ type: 'wrong', x: g.x, y: g.y });
     g.state = 'free';
     // Ставим на край стола у лотка и бросаем к центру кучи.
@@ -342,6 +380,30 @@ export class Session {
     g.vx = (dx / d) * 650;
     g.vy = (dy / d) * 650;
     g.spin = this.rng.range(-12, 12);
+  }
+
+  private addToCombo(g: Grain): void {
+    const prevMult = comboMultiplier(this.combo);
+    this.combo = this.comboTimer > 0 ? this.combo + 1 : 1;
+    this.comboTimer = COMBO_WINDOW;
+    this.bestCombo = Math.max(this.bestCombo, this.combo);
+
+    const mult = comboMultiplier(this.combo);
+    const points = POINTS_PER_GRAIN * mult;
+    this.score += points;
+    this.events.push({ type: 'sorted', x: g.x, y: g.y, kind: g.kind, combo: this.combo, points });
+    if (mult > prevMult) this.events.push({ type: 'combo', x: g.x, y: g.y, multiplier: mult });
+
+    if (this.config.timeLimit !== null && this.combo % TIME_BONUS_EVERY === 0) {
+      this.bonusTime += TIME_BONUS_SECONDS;
+      this.events.push({ type: 'timeBonus', x: g.x, y: g.y, seconds: TIME_BONUS_SECONDS });
+    }
+  }
+
+  private breakCombo(): void {
+    if (this.combo >= COMBO_MIN_SHOWN) this.events.push({ type: 'comboLost', combo: this.combo });
+    this.combo = 0;
+    this.comboTimer = 0;
   }
 
   private maybeSlip(g: Grain, dt: number): void {

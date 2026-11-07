@@ -12,11 +12,23 @@
  * (см. setSuspended), у игрока есть кнопка выключения звука.
  */
 
-export type SoundName = 'grab' | 'sorted' | 'wrong' | 'slipped' | 'won' | 'lost' | 'ui';
+export type SoundName =
+  | 'grab'
+  | 'sorted'
+  | 'combo'
+  | 'comboLost'
+  | 'timeBonus'
+  | 'wrong'
+  | 'slipped'
+  | 'won'
+  | 'lost'
+  | 'ui';
 
 export interface PlayOptions {
   /** Для 'sorted': доля разобранного, от 0 до 1. Определяет высоту ноты. */
   progress?: number;
+  /** Для 'combo': новый множитель, от него зависит высота аккорда. */
+  multiplier?: number;
 }
 
 /** Ре-минорная пентатоника на две октавы (Гц): D4 F4 G4 A4 C5 D5 F5 G5 A5 C6 D6. */
@@ -104,6 +116,24 @@ export class Sound {
         this.pluck(t + 0.01, note, 0.55, 0.5);
         break;
       }
+      case 'combo': {
+        // Множитель вырос: быстрый восходящий аккорд, выше с каждым множителем.
+        const base = Math.min(4, Math.max(2, opts.multiplier ?? 2)) - 2;
+        [0, 2, 4].forEach((step, i) =>
+          this.pluck(t + 0.06 + i * 0.05, PENTATONIC[Math.min(PENTATONIC.length - 1, base * 2 + step + 2)], 0.6, 0.22),
+        );
+        break;
+      }
+      case 'comboLost':
+        // Серия оборвалась: мягкая нисходящая пара нот.
+        this.pluck(t, PENTATONIC[3], 0.25, 0.12, 'sine', 1800);
+        this.pluck(t + 0.09, PENTATONIC[1], 0.35, 0.12, 'sine', 1800);
+        break;
+      case 'timeBonus':
+        // Звон колокольчика: высокая чистая нота с обертоном.
+        this.pluck(t + 0.12, PENTATONIC[10], 0.7, 0.16, 'sine', 6000);
+        this.pluck(t + 0.12, PENTATONIC[10] * 2.01, 0.4, 0.05, 'sine', 8000);
+        break;
       case 'wrong':
         this.thud(t);
         this.pluck(t + 0.02, 155.56, 0.3, 0.12, 'square', 900);

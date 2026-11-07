@@ -16,6 +16,11 @@ type Dict = {
   mistakes: string;
   soundOn: string;
   soundOff: string;
+  combo: string;
+  score: string;
+  bestCombo: string;
+  record: string;
+  timeBonus: (s: number) => string;
   hint: string;
   levelGoal: (kinds: string) => string;
   grains: Record<GrainKindId, string>;
@@ -35,6 +40,11 @@ const ru: Dict = {
   won: 'Разобрано!',
   lost: 'Время вышло',
   mistakes: 'Ошибки',
+  combo: 'комбо',
+  score: 'Очки',
+  bestCombo: 'Лучшее комбо',
+  record: 'Новый рекорд!',
+  timeBonus: (n) => `+${n} с`,
   soundOn: 'Звук: вкл',
   soundOff: 'Звук: выкл',
   hint: 'Нажмите на зерно, чтобы взять его палочками, и отпустите над нужным лотком. Ведите по пустому месту, чтобы разгрести кучу.',
@@ -65,6 +75,11 @@ const en: Dict = {
   won: 'Sorted!',
   lost: "Time's up",
   mistakes: 'Mistakes',
+  combo: 'combo',
+  score: 'Score',
+  bestCombo: 'Best combo',
+  record: 'New record!',
+  timeBonus: (n) => `+${n}s`,
   soundOn: 'Sound: on',
   soundOff: 'Sound: off',
   hint: 'Press on a grain to pick it up with the chopsticks and release it over the matching tray. Drag across empty space to spread the pile.',

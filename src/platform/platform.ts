@@ -10,6 +10,8 @@ export interface Progress {
   unlocked: number;
   /** Лучшее количество звёзд по уровням. */
   stars: Record<number, number>;
+  /** Рекорд очков по уровням. */
+  best: Record<number, number>;
 }
 
 export interface Platform {
@@ -28,7 +30,7 @@ export interface Platform {
   onResume(cb: () => void): void;
 }
 
-export const EMPTY_PROGRESS: Progress = { unlocked: 1, stars: {} };
+export const EMPTY_PROGRESS: Progress = { unlocked: 1, stars: {}, best: {} };
 const STORAGE_KEY = 'palochki.progress.v1';
 const SDK_TIMEOUT_MS = 4000;
 
@@ -63,17 +65,23 @@ declare global {
 }
 
 export function normalizeProgress(raw: unknown): Progress {
-  if (!raw || typeof raw !== 'object') return { ...EMPTY_PROGRESS, stars: {} };
+  if (!raw || typeof raw !== 'object') return { unlocked: 1, stars: {}, best: {} };
   const r = raw as Partial<Progress>;
   const unlocked = Number.isInteger(r.unlocked) && (r.unlocked as number) >= 1 ? (r.unlocked as number) : 1;
-  const stars: Record<number, number> = {};
-  if (r.stars && typeof r.stars === 'object') {
-    for (const [k, v] of Object.entries(r.stars)) {
-      const lvl = Number(k);
-      if (Number.isInteger(lvl) && lvl >= 1 && typeof v === 'number' && v >= 0 && v <= 3) stars[lvl] = v;
-    }
+  const stars = levelMap(r.stars, (v) => Number.isInteger(v) && v >= 0 && v <= 3);
+  // Прогресс из прошлых версий игры рекордов не содержит — это не ошибка.
+  const best = levelMap(r.best, (v) => Number.isInteger(v) && v >= 0);
+  return { unlocked, stars, best };
+}
+
+function levelMap(raw: unknown, valid: (v: number) => boolean): Record<number, number> {
+  const out: Record<number, number> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw)) {
+    const lvl = Number(k);
+    if (Number.isInteger(lvl) && lvl >= 1 && typeof v === 'number' && valid(v)) out[lvl] = v;
   }
-  return { unlocked, stars };
+  return out;
 }
 
 function readLocal(): Progress {
@@ -81,7 +89,7 @@ function readLocal(): Progress {
     const s = localStorage.getItem(STORAGE_KEY);
     return normalizeProgress(s ? JSON.parse(s) : null);
   } catch {
-    return { ...EMPTY_PROGRESS, stars: {} };
+    return { unlocked: 1, stars: {}, best: {} };
   }
 }
 
@@ -93,14 +101,21 @@ function writeLocal(p: Progress): void {
   }
 }
 
-/** Из двух копий прогресса берём ту, где игрок продвинулся дальше. */
-function mergeProgress(a: Progress, b: Progress): Progress {
-  const stars: Record<number, number> = { ...a.stars };
-  for (const [k, v] of Object.entries(b.stars)) {
-    const lvl = Number(k);
-    stars[lvl] = Math.max(stars[lvl] ?? 0, v);
-  }
-  return { unlocked: Math.max(a.unlocked, b.unlocked), stars };
+/** Из двух копий прогресса берём лучшее по каждому уровню. */
+export function mergeProgress(a: Progress, b: Progress): Progress {
+  const maxMap = (x: Record<number, number>, y: Record<number, number>) => {
+    const out: Record<number, number> = { ...x };
+    for (const [k, v] of Object.entries(y)) {
+      const lvl = Number(k);
+      out[lvl] = Math.max(out[lvl] ?? 0, v);
+    }
+    return out;
+  };
+  return {
+    unlocked: Math.max(a.unlocked, b.unlocked),
+    stars: maxMap(a.stars, b.stars),
+    best: maxMap(a.best, b.best),
+  };
 }
 
 function loadSdkScript(): Promise<void> {

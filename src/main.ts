@@ -76,6 +76,11 @@ class App {
         case 'sorted':
           this.sound.play('sorted', { progress: s.sortedCount / Math.max(1, s.totalTargets) });
           break;
+        case 'combo':
+          this.sound.play('combo', { multiplier: e.multiplier });
+          break;
+        case 'comboLost':
+        case 'timeBonus':
         case 'grab':
         case 'wrong':
         case 'slipped':
@@ -182,12 +187,17 @@ class App {
     const level = s.config.index;
     const won = s.status === 'won';
     const stars = s.stars();
+    let record = false;
     if (won) {
+      const prevBest = this.progress.best[level] ?? 0;
+      // Рекорд — только если до этого уровень уже проходили, иначе любой результат «рекорд».
+      record = prevBest > 0 && s.score > prevBest;
+      this.progress.best[level] = Math.max(prevBest, s.score);
       this.progress.stars[level] = Math.max(this.progress.stars[level] ?? 0, stars);
       this.progress.unlocked = Math.max(this.progress.unlocked, level + 1);
       void this.platform.saveProgress(this.progress);
     }
-    this.showResult(level, won, stars, s.mistakes);
+    this.showResult(s, stars, record);
   }
 
   private pause(): void {
@@ -262,11 +272,23 @@ class App {
     );
   }
 
-  private showResult(level: number, won: boolean, stars: number, mistakes: number): void {
+  private showResult(s: Session, stars: number, record: boolean): void {
     const tr = t();
+    const level = s.config.index;
+    const won = s.status === 'won';
     const parts: HTMLElement[] = [el('h2', '', won ? tr.won : tr.lost)];
     if (won) parts.push(el('div', 'stars', starsText(stars)));
-    parts.push(el('p', 'muted', `${tr.level} ${level} · ${tr.mistakes}: ${mistakes}`));
+    const score = el('div', 'score');
+    score.append(el('span', 'score-label', tr.score), el('span', 'score-value', String(s.score)));
+    parts.push(score);
+    if (record) parts.push(el('div', 'record', tr.record));
+    parts.push(
+      el(
+        'p',
+        'muted',
+        `${tr.level} ${level} · ${tr.mistakes}: ${s.mistakes} · ${tr.bestCombo}: ${s.bestCombo}`,
+      ),
+    );
     if (won) parts.push(button(tr.next, () => void this.goNext(level), 'primary'));
     parts.push(button(tr.retry, () => this.startLevel(level), won ? '' : 'primary'));
     parts.push(button(tr.menu, () => this.showMenu()));
