@@ -41,7 +41,8 @@ export interface StepOptions {
 
 const RESTITUTION = 0.15;
 
-export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): void {
+/** Возвращает, сколько раз толкатели задели зёрна за шаг (для звука разгребания). */
+export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): number {
   const { damping, bounds, pushers = [], kinematic = null, iterations = 2 } = opts;
   const linDamp = Math.exp(-damping * dt);
   const angDamp = Math.exp(-damping * 1.5 * dt);
@@ -55,6 +56,7 @@ export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): void
     b.spin *= angDamp;
   }
 
+  let contacts = 0;
   for (const p of pushers) {
     for (const b of bodies) {
       const dx = b.x - p.x;
@@ -65,6 +67,7 @@ export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): void
       const d = Math.sqrt(d2) || 0.0001;
       const nx = dx / d;
       const ny = dy / d;
+      contacts++;
       b.x = p.x + nx * minD;
       b.y = p.y + ny * minD;
       // Зерно увлекается движением палочек и получает толчок наружу.
@@ -80,6 +83,7 @@ export function stepPhysics(bodies: Body[], dt: number, opts: StepOptions): void
   }
 
   for (const b of bodies) clampToBounds(b, bounds);
+  return contacts;
 }
 
 function resolveCollisions(bodies: Body[], kinematic: Body | null): void {

@@ -14,6 +14,8 @@ type Dict = {
   won: string;
   lost: string;
   mistakes: string;
+  soundOn: string;
+  soundOff: string;
   hint: string;
   levelGoal: (kinds: string) => string;
   grains: Record<GrainKindId, string>;
@@ -33,6 +35,8 @@ const ru: Dict = {
   won: 'Разобрано!',
   lost: 'Время вышло',
   mistakes: 'Ошибки',
+  soundOn: 'Звук: вкл',
+  soundOff: 'Звук: выкл',
   hint: 'Нажмите на зерно, чтобы взять его палочками, и отпустите над нужным лотком. Ведите по пустому месту, чтобы разгрести кучу.',
   levelGoal: (k) => `Рассортируйте: ${k}`,
   grains: {
@@ -61,6 +65,8 @@ const en: Dict = {
   won: 'Sorted!',
   lost: "Time's up",
   mistakes: 'Mistakes',
+  soundOn: 'Sound: on',
+  soundOff: 'Sound: off',
   hint: 'Press on a grain to pick it up with the chopsticks and release it over the matching tray. Drag across empty space to spread the pile.',
   levelGoal: (k) => `Sort: ${k}`,
   grains: {

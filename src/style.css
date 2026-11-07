@@ -73,6 +73,8 @@ body {
 
 .hud-btn {
   pointer-events: auto;
+  display: grid;
+  place-items: center;
   border: 0;
   width: 38px;
   height: 38px;
@@ -83,6 +85,19 @@ body {
   font-size: 14px;
   box-shadow: 0 2px 8px rgba(60, 40, 20, 0.15);
   cursor: pointer;
+}
+
+#hud-sound .cross,
+#hud-sound.off .wave {
+  display: none;
+}
+
+#hud-sound.off .cross {
+  display: inline;
+}
+
+#hud-sound.off {
+  color: var(--muted);
 }
 
 /* ——— экраны ——— */

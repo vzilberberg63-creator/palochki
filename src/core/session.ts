@@ -70,6 +70,11 @@ export class Session {
   elapsed = 0;
   mistakes = 0;
   sortedCount = 0;
+  /**
+   * Насколько активно палочки сейчас разгребают кучу: 0 — нет, 1 — быстро и сквозь много зёрен.
+   * Нужна для непрерывного шороха.
+   */
+  rakeActivity = 0;
   /** События за кадр для звука и эффектов; внешний код их забирает. */
   events: GameEvent[] = [];
 
@@ -146,6 +151,7 @@ export class Session {
 
   pointerUp(): void {
     this.chop.pressed = false;
+    this.rakeActivity = 0;
     const g = this.heldGrain;
     if (g) this.release(g);
   }
@@ -175,15 +181,20 @@ export class Session {
       pushers.push({ x: c.x, y: c.y, r: RAKE_RADIUS, vx: c.vx, vy: c.vy });
     }
 
-    stepPhysics(this.freeGrains(), dt, {
+    const contacts = stepPhysics(this.freeGrains(), dt, {
       damping: this.config.damping,
       bounds: this.bounds,
       pushers,
       kinematic: this.heldGrain,
     });
+    const speed = Math.hypot(c.vx, c.vy);
+    const target = pushers.length > 0 ? Math.min(1, contacts / 4) * Math.min(1, speed / 500) : 0;
+    // Сглаживаем, чтобы шорох не трещал от кадра к кадру.
+    this.rakeActivity += (target - this.rakeActivity) * Math.min(1, dt * 12);
 
     const left = this.timeLeft;
     if (left !== null && left <= 0) {
+      this.rakeActivity = 0;
       this.dropHeld();
       this.status = 'lost';
       this.events.push({ type: 'lost' });

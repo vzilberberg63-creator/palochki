@@ -106,11 +106,16 @@ describe('Session', () => {
     // Ведём палочками сквозь кучу, начиная с пустого места.
     s.pointerDown(150, 390);
     expect(s.heldGrain).toBeNull();
+    let maxActivity = 0;
     for (let x = 150; x <= 850; x += 10) {
       s.pointerMove(x, 390);
       s.update(1 / 60);
+      maxActivity = Math.max(maxActivity, s.rakeActivity);
     }
+    // Шорох слышен, пока палочки идут сквозь кучу, и стихает, когда их отпускают.
+    expect(maxActivity).toBeGreaterThan(0.3);
     s.pointerUp();
+    expect(s.rakeActivity).toBe(0);
     const moved = s.grains.filter((g, i) => Math.hypot(g.x - before[i].x, g.y - before[i].y) > 5).length;
     expect(moved).toBeGreaterThan(5);
   });
