@@ -1,3 +1,5 @@
 node_modules/
+dist/
+palochki.zip
 .DS_Store
 *.log
