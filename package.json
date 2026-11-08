@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "zip": "npm run build && cd dist && rm -f ../palochki.zip && zip -qr ../palochki.zip ."
+    "zip": "npm run build && cd dist && rm -f ../palochki.zip && zip -qr ../palochki.zip .",
+    "games:dev": "node games/run.mjs dev",
+    "games:build": "node games/run.mjs build"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

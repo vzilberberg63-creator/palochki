@@ -1,0 +1,11 @@
+@import '../shared/base.css';
+
+:root {
+  --bg: #cfe6ef;
+  --ink: #1f3340;
+  --muted: #557080;
+  --card: #fbfdfc;
+  --btn: #e3eff2;
+  --accent: #2a8c6a;
+  --accent-ink: #ffffff;
+}

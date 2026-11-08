@@ -1,0 +1,16 @@
+@import '../shared/base.css';
+
+:root {
+  --bg: #1f2e36;
+  --ink: #2a2622;
+  --muted: #6f665c;
+  --card: #f8f4ec;
+  --btn: #ece4d6;
+  --accent: #e0562f;
+  --accent-ink: #ffffff;
+}
+
+#hud .hud-item,
+#hud .hud-btn {
+  background: #f8f4ec;
+}
