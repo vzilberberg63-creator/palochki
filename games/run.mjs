@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { build, createServer } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const GAMES = ['tea', 'half', 'bubble'];
+export const GAMES = ['tea', 'half', 'bubble', 'drain'];
 
 function config(id) {
   return {
