@@ -24,6 +24,10 @@ export interface Texts {
   continueAd: string;
   soundOn: string;
   soundOff: string;
+  /** Для игр с уровнями: заголовок победы, кнопка «дальше», слово «уровень». */
+  win?: string;
+  next?: string;
+  levelWord?: string;
 }
 
 export interface Game {
@@ -38,7 +42,12 @@ export interface Game {
   pointerMove(x: number, y: number, id: number): void;
   pointerUp(x: number, y: number, id: number): void;
   readonly score: number;
+  /** Партия проиграна. */
   readonly over: boolean;
+  /** Игры с уровнями: уровень пройден, сколько звёзд и какой уровень запускать. */
+  readonly won?: boolean;
+  stars?(): number;
+  setLevel?(level: number): void;
   /** Строка в HUD справа от счёта: жизни, время и т.п. */
   hudExtra(): string;
 }
@@ -51,11 +60,15 @@ export interface ShellOptions {
   stageToWorld: (clientX: number, clientY: number) => { x: number; y: number };
   /** С какой партии показывать полноэкранную рекламу между партиями. */
   adsFromGame?: number;
+  /** Игра с уровнями: открытый уровень сохраняется, после победы — экран со звёздами и «Дальше». */
+  levels?: boolean;
 }
 
 interface Save {
   best: number;
   muted: boolean;
+  /** Максимальный открытый уровень (для игр с уровнями). */
+  level: number;
 }
 
 type State = 'menu' | 'playing' | 'paused' | 'over' | 'ad';
@@ -66,8 +79,12 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
   document.documentElement.lang = ru ? 'ru' : 'en';
   const t = opts.texts(ru);
   const synth = new Synth();
-  const saved = (await platform.load<Save>(opts.storageKey)) ?? { best: 0, muted: false };
-  const save: Save = { best: Number(saved.best) || 0, muted: saved.muted === true };
+  const saved = (await platform.load<Partial<Save>>(opts.storageKey)) ?? {};
+  const save: Save = {
+    best: Number(saved.best) || 0,
+    muted: saved.muted === true,
+    level: Number.isInteger(saved.level) && (saved.level as number) >= 1 ? (saved.level as number) : 1,
+  };
   synth.setMuted(save.muted);
   const game = opts.create({ synth, ru, platform });
 
@@ -76,6 +93,8 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
   let state: State = 'menu';
   let revived = false;
   let games = 0;
+  /** Уровень, который сейчас идёт (для игр с уровнями). */
+  let current = 1;
   let adBusy = false;
 
   const persist = () => void platform.save(opts.storageKey, save);
@@ -128,7 +147,11 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
   refreshSound();
 
   // ——— состояния ———
-  function play(): void {
+  function play(level?: number): void {
+    if (opts.levels) {
+      current = level ?? save.level;
+      game.setLevel?.(current);
+    }
     game.start();
     revived = false;
     games++;
@@ -163,7 +186,7 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
     }
   }
 
-  async function playAgain(): Promise<void> {
+  async function playAgain(level?: number): Promise<void> {
     if (games >= (opts.adsFromGame ?? 2)) {
       state = 'ad';
       hideScreen();
@@ -171,7 +194,28 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
       await platform.showInterstitial();
       synth.setSuspended('ad', false);
     }
-    play();
+    play(level);
+  }
+
+  /** Уровень пройден: звёзды, открываем следующий. */
+  function levelWon(): void {
+    state = 'over';
+    platform.gameplayStop();
+    save.level = Math.max(save.level, current + 1);
+    save.best = Math.max(save.best, game.score);
+    persist();
+    const stars = Math.max(0, Math.min(3, game.stars?.() ?? 0));
+    const big = el('div', 'score');
+    big.append(el('span', 'label', t.score), el('span', 'value', String(game.score)));
+    showScreen(
+      el('h2', '', t.win ?? t.gameOver),
+      el('div', 'stars', '★'.repeat(stars) + '☆'.repeat(3 - stars)),
+      el('p', 'muted', `${t.levelWord ?? ''} ${current}`.trim()),
+      big,
+      button(t.next ?? t.again, () => void playAgain(current + 1), 'primary'),
+      button(t.again, () => void playAgain(current)),
+      button(t.menu, showMenu),
+    );
   }
 
   function gameOver(): void {
@@ -205,7 +249,7 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
       );
       parts.push(cont);
     }
-    parts.push(button(t.again, () => void playAgain(), revived ? 'primary' : ''));
+    parts.push(button(t.again, () => void playAgain(opts.levels ? current : undefined), revived ? 'primary' : ''));
     parts.push(button(t.menu, showMenu));
     showScreen(...parts);
   }
@@ -226,7 +270,7 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
       el('p', 'tagline', t.tagline),
       el('p', 'howto', t.howTo),
       save.best > 0 ? el('p', 'muted', `${t.best}: ${save.best}`) : el('span'),
-      button(t.play, play, 'primary'),
+      button(opts.levels ? `${t.play} · ${t.levelWord ?? ''} ${save.level}`.replace('  ', ' ') : t.play, () => play(), 'primary'),
       snd,
     );
   }
@@ -241,7 +285,8 @@ export async function startShell(opts: ShellOptions, canvas: HTMLCanvasElement, 
       const ex = byId('hud-extra');
       ex.textContent = extra;
       ex.classList.toggle('hidden', !extra);
-      if (game.over) gameOver();
+      if (game.won) levelWon();
+      else if (game.over) gameOver();
     },
     (dt) => game.draw(state === 'playing' ? dt : 0),
   );

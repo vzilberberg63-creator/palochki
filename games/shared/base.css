@@ -212,3 +212,9 @@ body {
     font-size: 14px;
   }
 }
+
+.stars {
+  font-size: 44px;
+  color: #e0a526;
+  letter-spacing: 6px;
+}

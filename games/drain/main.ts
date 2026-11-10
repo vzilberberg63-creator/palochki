@@ -1,20 +1,23 @@
 import { SCALE, Synth } from '../shared/audio';
 import { Game, startShell } from '../shared/shell';
 import { Stage, roundRect, runLoop } from '../shared/stage';
-import { CELL, COLS, Debris, DrainModel, GRATE, RAKE_HALF, ROWS, SIDEWALK, WORLD_H, WORLD_W } from './drain';
+import { CELL, COLS, Debris, DrainModel, Grate, RAKE_HALF, ROWS, SIDEWALK, WORLD_H, WORLD_W } from './drain';
 
 const TEXTS = (ru: boolean) =>
   ru
     ? {
         title: 'Водосток',
-        tagline: 'Ливень не ждёт. Решётка должна дышать.',
-        howTo: 'Дождь заливает дорогу, а листья и мусор плывут к решётке и забивают её. Ведите пальцем — грабли сгребают мусор. Сметайте его на тротуар, пока воду не подняло до бордюра.',
+        tagline: 'Улицу залило. Прочистите ливнёвку.',
+        howTo: 'Решётки завалены листьями и мусором, вода стоит. Ведите пальцем — грабли сгребают мусор. Сметите его на тротуар и соскребите грязь: воду прорвёт, и улица высохнет.',
         play: 'За грабли',
         again: 'Ещё раз',
         resume: 'Продолжить',
         menu: 'Меню',
         paused: 'Пауза',
-        gameOver: 'Дорогу затопило',
+        gameOver: 'Улицу затопило',
+        win: 'Улица сухая!',
+        next: 'Дальше',
+        levelWord: 'Уровень',
         score: 'Очки',
         best: 'Рекорд',
         record: 'Новый рекорд!',
@@ -24,14 +27,17 @@ const TEXTS = (ru: boolean) =>
       }
     : {
         title: 'Storm Drain',
-        tagline: 'The downpour will not wait. Keep the grate clear.',
-        howTo: 'Rain floods the road while leaves and litter drift to the grate and clog it. Drag to rake. Sweep the litter onto the sidewalk before the water reaches the curb.',
+        tagline: 'The street is flooded. Unclog the drain.',
+        howTo: 'The grates are buried under leaves and litter, and the water will not go. Drag to rake. Sweep the litter onto the sidewalk and scrape off the mud: the water breaks through and the street dries.',
         play: 'Grab the rake',
         again: 'Again',
         resume: 'Resume',
         menu: 'Menu',
         paused: 'Paused',
-        gameOver: 'The road is flooded',
+        gameOver: 'The street is flooded',
+        win: 'The street is dry!',
+        next: 'Next',
+        levelWord: 'Level',
         score: 'Score',
         best: 'Best',
         record: 'New record!',
@@ -52,8 +58,14 @@ interface Float {
 }
 
 class DrainGame implements Game {
-  private model = new DrainModel();
-  private readonly ground: HTMLCanvasElement;
+  private levelIndex = 1;
+  private model = new DrainModel(1);
+  private ground: HTMLCanvasElement;
+  /** Брызги грязи из-под граблей. */
+  private splats: { x: number; y: number; vx: number; vy: number; age: number }[] = [];
+  /** Всплеск над решёткой в момент прорыва: секунды с начала, по решёткам. */
+  private bursts: number[] = [];
+  private everCollected = false;
   private readonly waterCanvas: HTMLCanvasElement;
   private readonly waterCtx: CanvasRenderingContext2D;
   private readonly waterImage: ImageData;
@@ -84,14 +96,28 @@ class DrainGame implements Game {
   get over(): boolean {
     return this.model.over;
   }
+  get won(): boolean {
+    return this.model.won;
+  }
+  stars(): number {
+    return this.model.stars();
+  }
+  setLevel(level: number): void {
+    this.levelIndex = level;
+  }
   hudExtra(): string {
-    const pct = Math.min(100, Math.round(this.model.flood * 100));
-    return `${this.ru ? 'Вода' : 'Water'} ${pct}%`;
+    const m = this.model;
+    const pct = Math.min(100, Math.round(m.flood * 100));
+    const sec = Math.floor(m.time);
+    return `${this.ru ? 'Вода' : 'Water'} ${pct}% · ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
   }
   start(): void {
-    this.model = new DrainModel();
+    this.model = new DrainModel(this.levelIndex);
+    this.ground = this.paintGround();
     this.floats = [];
     this.ripples = [];
+    this.splats = [];
+    this.bursts = this.model.grates.map(() => -1);
     this.pointer = -1;
   }
   revive(): void {
@@ -123,20 +149,44 @@ class DrainGame implements Game {
         this.floats.push({ x: e.x, y: e.y, text: `+${e.points}`, age: 0 });
         this.synth.click(e.kind === 'bottle' ? 2600 : 1500, 0.04, 0.3);
         this.synth.note(SCALE[2 + Math.min(6, e.points)], 0.25, 0.1, 0, 'sine');
+        this.everCollected = true;
+      } else if (e.type === 'mud') {
+        const a = Math.random() * Math.PI * 2;
+        this.splats.push({ x: e.x, y: e.y, vx: Math.cos(a) * 60 + m.rake.dirX * 120, vy: Math.sin(a) * 60 + m.rake.dirY * 120, age: 0 });
+        if (Math.random() < 0.2) this.synth.click(420, 0.06, 0.2);
+      } else if (e.type === 'breakthrough') {
+        // Воду прорвало: глухой «глоток» и всплеск.
+        this.bursts[e.grate] = 0;
+        this.synth.thud(0.45);
+        this.synth.click(600, 0.3, 0.3);
+      } else if (e.type === 'won') {
+        [0, 2, 4, 7].forEach((k, i) => this.synth.note(SCALE[k], 0.7, 0.2, i * 0.09));
       } else if (e.type === 'flood') {
         this.synth.thud(0.6);
       }
     }
-    // Дождь шумит всегда, решётка булькает, когда вода уходит, грабли шуршат по асфальту.
-    this.synth.loop('rain', 0.25 + m.rain * 0.3, 5200, 0.5);
-    this.synth.loop('gurgle', m.drainFlow * 0.9, 260, 3);
+    const raining = m.level.rain > 0;
+    const flow = Math.max(0, ...m.drainFlow);
+    // Дождь шумит на дождливых уровнях, решётка булькает, когда вода уходит, грабли шуршат по асфальту.
+    this.synth.loop('rain', raining ? 0.45 : 0, 5200, 0.5);
+    this.synth.loop('gurgle', flow * 0.9, 260, 3);
     this.synth.loop('rake', m.rakeActivity * 0.8, 1800, 1.2);
 
     this.warnIn -= dt;
-    if (m.flood > 0.75 && this.warnIn <= 0) {
+    if (raining && m.flood > 0.85 && this.warnIn <= 0) {
       this.synth.click(1500, 0.03, 0.4);
-      this.warnIn = 0.6 - (m.flood - 0.75) * 1.6;
+      this.warnIn = 0.5 - (m.flood - 0.85) * 2;
     }
+    for (let i = 0; i < this.bursts.length; i++) if (this.bursts[i] >= 0) this.bursts[i] += dt;
+    for (const p of this.splats) {
+      p.age += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.9;
+      p.vy *= 0.9;
+    }
+    this.splats = this.splats.filter((p) => p.age < 0.5);
+    if (!raining) return;
 
     for (const d of this.rainDrops) {
       d.y += 1500 * dt;
@@ -154,15 +204,18 @@ class DrainGame implements Game {
     const ctx = this.stage.begin('#22282e');
     const m = this.model;
     ctx.drawImage(this.ground, 0, 0, WORLD_W, WORLD_H);
-    this.drawGrate(ctx);
+    for (const g of m.grates) this.drawGrate(ctx, g);
     this.drawWater(ctx);
+    this.drawMud(ctx);
     this.drawRipples(ctx, dt);
-    this.drawVortex(ctx);
+    m.grates.forEach((g, i) => this.drawVortex(ctx, g, m.drainFlow[i], this.bursts[i] ?? -1));
     for (const d of m.debris) this.drawDebris(ctx, d);
+    this.drawSplats(ctx);
     this.drawRake(ctx);
-    this.drawRain(ctx);
+    if (m.level.rain > 0) this.drawRain(ctx);
     this.drawFloats(ctx, dt);
     this.drawFloodBar(ctx);
+    this.drawHint(ctx);
     this.drawWarning(ctx);
   }
 
@@ -185,7 +238,9 @@ class DrainGame implements Game {
     // Прерывистая разметка.
     g.fillStyle = 'rgba(230, 230, 220, 0.5)';
     for (let y = 20; y < WORLD_H; y += 110) {
-      if (y > GRATE.y - 80 && y < GRATE.y + GRATE.h + 20) continue;
+      // Пропускаем штрихи, которые легли бы на решётку.
+      const onGrate = this.model.grates.some((gr) => gr.x < WORLD_W / 2 + 10 && gr.x + gr.w > WORLD_W / 2 - 10 && y > gr.y - 70 && y < gr.y + gr.h + 14);
+      if (onGrate) continue;
       g.fillRect(WORLD_W / 2 - 4, y, 8, 56);
     }
     // Тротуары плиткой и бордюры.
@@ -214,8 +269,8 @@ class DrainGame implements Game {
     return c;
   }
 
-  private drawGrate(ctx: CanvasRenderingContext2D): void {
-    const { x, y, w, h } = GRATE;
+  private drawGrate(ctx: CanvasRenderingContext2D, grate: Grate): void {
+    const { x, y, w, h } = grate;
     roundRect(ctx, x - 6, y - 6, w + 12, h + 12, 8);
     ctx.fillStyle = '#5b6168';
     ctx.fill();
@@ -270,15 +325,71 @@ class DrainGame implements Game {
     this.ripples = this.ripples.filter((r) => r.age < 0.6);
   }
 
-  /** Воронка над решёткой: чем больше воды уходит, тем заметнее. */
-  private drawVortex(ctx: CanvasRenderingContext2D): void {
-    const f = this.model.drainFlow;
+  /** Грязь на решётках: бурые пятна, которые стираются под граблями. */
+  private drawMud(ctx: CanvasRenderingContext2D): void {
+    const m = this.model;
+    for (const g of m.grates) {
+      for (const i of g.cells) {
+        const v = m.mud[i];
+        if (v <= 0.02) continue;
+        const x = (i % COLS) * CELL;
+        const y = Math.floor(i / COLS) * CELL;
+        ctx.fillStyle = `rgba(92, 64, 38, ${Math.min(0.95, v)})`;
+        ctx.beginPath();
+        ctx.ellipse(x + CELL / 2, y + CELL / 2, CELL * 0.75, CELL * 0.7, (i * 1.7) % 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  private drawSplats(ctx: CanvasRenderingContext2D): void {
+    for (const p of this.splats) {
+      ctx.fillStyle = `rgba(92, 64, 38, ${0.8 * (1 - p.age / 0.5)})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Подсказка на первых уровнях, пока игрок не начал. */
+  private drawHint(ctx: CanvasRenderingContext2D): void {
+    const m = this.model;
+    let text = '';
+    if (m.level.index === 1 && !this.everCollected) text = this.ru ? 'Сметите мусор с решётки на тротуар' : 'Sweep the litter off the grate onto the sidewalk';
+    else if (m.level.index === 3 && m.time < 7) text = this.ru ? 'Грязь соскребайте граблями' : 'Scrape the mud off with the rake';
+    else if (m.level.rain > 0 && m.time < 5) text = this.ru ? 'Идёт дождь — вода прибывает!' : 'It is raining: the water is rising!';
+    if (!text) return;
+    ctx.save();
+    ctx.font = `700 22px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(text).width + 36;
+    roundRect(ctx, WORLD_W / 2 - w / 2, 52, w, 44, 14);
+    ctx.fillStyle = 'rgba(16, 22, 28, 0.82)';
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, WORLD_W / 2, 75);
+    ctx.restore();
+  }
+
+  /** Воронка над решёткой: чем больше воды уходит, тем заметнее; в момент прорыва — всплеск. */
+  private drawVortex(ctx: CanvasRenderingContext2D, grate: Grate, f: number, burst: number): void {
+    const cx = grate.x + grate.w / 2;
+    const cy = grate.y + grate.h / 2;
+    if (burst >= 0 && burst < 0.9) {
+      const k = burst / 0.9;
+      ctx.save();
+      ctx.strokeStyle = `rgba(225, 242, 255, ${0.9 * (1 - k)})`;
+      ctx.lineWidth = 6 * (1 - k) + 1;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 30 + k * 150, 20 + k * 110, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (f < 0.03) return;
-    const cx = GRATE.x + GRATE.w / 2;
-    const cy = GRATE.y + GRATE.h / 2;
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.scale(1, GRATE.h / GRATE.w + 0.2);
+    ctx.scale(1, grate.h / grate.w + 0.2);
     ctx.lineCap = 'round';
     for (let i = 0; i < 4; i++) {
       const r = 14 + i * 13;
@@ -413,7 +524,7 @@ class DrainGame implements Game {
   }
 
   private drawRain(ctx: CanvasRenderingContext2D): void {
-    const heavy = Math.min(1, this.model.rain / 1.5);
+    const heavy = Math.min(1, this.model.level.rain / 0.075);
     ctx.save();
     ctx.strokeStyle = `rgba(215, 232, 245, ${0.22 + heavy * 0.25})`;
     ctx.lineWidth = 1.6;
@@ -456,11 +567,11 @@ class DrainGame implements Game {
     ctx.fillStyle = 'rgba(10, 14, 18, 0.55)';
     ctx.fill();
     if (f <= 0.01) return;
-    const danger = f > 0.75;
+    const danger = this.model.level.rain > 0 && f > 0.85;
     ctx.save();
     if (danger) ctx.globalAlpha = 0.65 + 0.35 * Math.sin(this.clock * 12);
     roundRect(ctx, x, 18, Math.max(12, w * f), 12, 6);
-    ctx.fillStyle = danger ? '#e2553b' : f > 0.45 ? '#e8a21a' : '#5fb2e0';
+    ctx.fillStyle = danger ? '#e2553b' : '#5fb2e0';
     ctx.fill();
     ctx.restore();
   }
@@ -468,8 +579,8 @@ class DrainGame implements Game {
   /** Вода у бордюра: тротуары мигают красным. */
   private drawWarning(ctx: CanvasRenderingContext2D): void {
     const f = this.model.flood;
-    if (f < 0.75) return;
-    const a = (f - 0.75) * 1.6 * (0.5 + 0.5 * Math.sin(this.clock * 12));
+    if (this.model.level.rain <= 0 || f < 0.85) return;
+    const a = (f - 0.85) * 2.6 * (0.5 + 0.5 * Math.sin(this.clock * 12));
     ctx.fillStyle = `rgba(226, 85, 59, ${Math.min(0.45, a)})`;
     ctx.fillRect(0, 0, SIDEWALK, WORLD_H);
     ctx.fillRect(WORLD_W - SIDEWALK, 0, SIDEWALK, WORLD_H);
@@ -483,6 +594,7 @@ void startShell(
     storageKey: 'storm-drain.v1',
     texts: TEXTS,
     create: ({ synth, ru }) => new DrainGame(stage, synth, ru),
+    levels: true,
     stageToWorld: (x, y) => stage.toWorld(x, y),
   },
   canvas,
